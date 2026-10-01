@@ -1,0 +1,165 @@
+# JEV Trading — default configuration.
+# Every number here is an initial SOFTWARE PARAMETER, not a financial recommendation.
+# Precedence: this file < profile (--config) < env JEV__SECTION__KEY < CLI options.
+# Secrets NEVER go in this file: use environment variables / .env (see .env.example).
+
+app:
+  name: jev-trading
+  environment: local
+
+trading:
+  mode: paper                   # backtest | replay | shadow | paper | live (live is blocked in code)
+  strategy: jev-intraday-v1
+  symbols: [MOCKA, MOCKB, MOCKC]
+  asset_class: US_EQUITY
+  timeframe: 1Min               # feed timeframe
+  decision_timeframe: 1Min      # timeframe fed to the pipeline (aggregated when coarser)
+  horizon_minutes: 15
+  exchange_timezone: America/New_York
+  session_open: "09:30"
+  session_close: "16:00"
+
+market_data:
+  provider: mock                # mock | alpaca (phase 4) | ibkr (phase 8)
+  mock:                         # deterministic synthetic market (NOT real data)
+    seed: 7
+    start_price: 100.0
+    annual_volatility: 0.35
+    base_spread_bps: 2.0
+    base_volume: 20000
+    ticks_per_bar: 12
+    regime_persistence: 0.985
+    trend_drift_bps: 1.5
+    high_vol_multiplier: 2.5
+    overnight_gap_bps: 30.0
+    gap_rate: 0.0               # anomaly injection (tests)
+    duplicate_rate: 0.0
+    outlier_rate: 0.0
+
+broker:
+  mode: paper                   # paper only; live is blocked in code
+  active: mock                  # mock | alpaca (phase 4) | ibkr (phase 8)
+  routing: {}                   # later: {US_EQUITY: alpaca, FUTURES: ibkr}
+  mock:
+    enabled: true
+    account_ref: MOCK-PAPER-001
+    initial_cash: 100000.0
+    buying_power_multiplier: 1.0
+    partial_fills: false
+    participation_rate: 0.10
+    intrabar_policy: conservative   # conservative | optimistic
+    shortable_symbols: null         # null = every symbol shortable
+  alpaca:
+    enabled: false
+    paper: true
+    feed: iex
+  ibkr:
+    enabled: false
+    paper: true
+    host: 127.0.0.1
+    port: 7497
+    client_id: 17
+
+data_quality:
+  max_bar_delay_seconds: 90     # older than this at processing time -> STALE
+  max_future_skew_seconds: 5    # bar end in the future beyond this -> INVALID
+  max_abs_return_sigma: 12      # bar-to-bar jump beyond N sigma -> DEGRADED
+  jump_lookback_bars: 20
+  max_spread_bps: 50            # wider quotes -> DEGRADED
+  gap_memory_bars: 15           # stay DEGRADED this many bars after a gap
+  block_on_degraded: true
+
+features:
+  version: "0.1.0"
+  window: 150                   # features are a pure function of the last `window` bars
+  min_bars: 101
+  include_microstructure: true
+
+model:
+  name: jev-heuristic           # stand-in model (no validated edge) | baseline-random | baseline-flat
+  version: "0.1.0"
+  params: {}
+
+regime:
+  adx_trend: 25
+  adx_range: 20
+  trend_tstat: 2.0
+  high_vol_ratio: 1.5
+  low_vol_ratio: 0.6
+
+signals:
+  min_probability: 0.55
+  min_confidence: 0.10
+  min_net_edge_bps: 1.0         # expected value net of costs must exceed this
+  max_spread_bps: 15
+  blocked_regimes: [UNKNOWN]
+  signal_ttl_seconds: 120
+
+costs:
+  default_spread_bps: 2.0       # used when no quote is available
+  slippage_bps: 2.0             # per side, adverse
+  commission_per_share: 0.0     # verify your broker's current fee schedule
+  commission_bps: 0.0
+  min_commission: 0.0
+  sec_fee_rate: 0.0             # fraction of SELL notional — set from the current SEC Section 31 rate
+  taf_per_share: 0.0            # FINRA TAF on SELLS — set from the current schedule
+  taf_max_per_trade: 0.0
+  latency_ms: 250
+  latency_cost_factor: 0.5
+
+risk:
+  max_risk_per_trade: 0.005
+  max_daily_loss: 0.02
+  max_total_exposure: 0.25
+  max_open_positions: 5
+  max_symbol_exposure: 0.10
+  max_drawdown: 0.10
+  allow_short: true
+  atr_stop_multiple: 2.0
+  take_profit_rr: 1.5
+  min_risk_reward: 1.0
+  min_stop_bps: 10
+  max_stop_bps: 300
+  no_entry_first_minutes: 5
+  no_entry_last_minutes: 20
+  buying_power_usage: 0.95
+  sizing:
+    method: fixed_risk          # fixed_risk (implemented) | fixed_fraction | volatility_adjusted | risk_parity | fractional_kelly
+    kelly_enabled: false
+    kelly_fraction: 0.25
+
+execution:
+  entry_order_type: market
+  time_in_force: day
+  use_bracket: true
+  exit_at_horizon: true
+  flatten_minutes_before_close: 5
+  ack_timeout_seconds: 15
+  max_submit_attempts: 2
+  max_exit_attempts: 3
+
+kill_switch:
+  stale_data_seconds: 180
+  broker_disconnect_seconds: 60
+  max_avg_slippage_bps: 25
+  slippage_window: 20
+  min_fills_for_slippage: 5
+  max_decision_latency_ms: 5000
+  max_consecutive_model_errors: 3
+  cancel_entries_on_kill: true
+  flatten_on_kill: false
+
+persistence:
+  database_url: sqlite+aiosqlite:///data/jev.db
+  store_bars: true
+  store_features: true
+  store_predictions: true
+  batch_size: 500
+  snapshot_every_minutes: 5
+
+redis:
+  url: null                     # phase 5
+
+logging:
+  level: INFO
+  json_format: true

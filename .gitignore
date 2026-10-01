@@ -1,0 +1,37 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local data and model artifacts
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.parquet
+models/*
+!models/README.md
+
+# Frontend (phase 6)
+node_modules/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
