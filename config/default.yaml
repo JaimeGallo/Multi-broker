@@ -55,10 +55,9 @@ broker:
     participation_rate: 0.10
     intrabar_policy: conservative   # conservative | optimistic
     shortable_symbols: null         # null = every symbol shortable
-  alpaca:
+  alpaca:                       # phase 4: Alpaca PAPER only (paper-api.alpaca.markets); live is refused
     enabled: false
     paper: true
-    feed: iex
   ibkr:
     enabled: false
     paper: true

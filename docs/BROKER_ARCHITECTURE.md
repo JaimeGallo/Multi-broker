@@ -116,13 +116,18 @@ Es a la vez el broker de desarrollo, el motor de ejecución del backtest y (Fase
 
 Solo APIs oficiales, solo **paper**. Nada de scraping ni clicks.
 
-- **SDK:** `alpaca-py` (oficial). `TradingClient(api_key, secret_key, paper=True)` para órdenes/cuenta;
-  `TradingStream` para `trade_updates`; `StockDataStream` para barras/quotes/trades en tiempo real;
-  `StockHistoricalDataClient` para históricos.
-- **Verificación de paper:** el adapter se construye con `paper=True` fijo en modo paper y reporta
-  `is_paper=True` solo si el endpoint es el de paper; cualquier otra combinación aborta el arranque.
-- **Órdenes:** entrada `MarketOrderRequest` con `order_class=bracket`, `TakeProfitRequest(limit_price)`,
-  `StopLossRequest(stop_price)`, `time_in_force=day`, `client_order_id` determinista.
+- **Implementación:** REST con `httpx` y streams con `websockets`, sin `alpaca-py` (mismas APIs oficiales;
+  los tests sustituyen la red por un Alpaca en memoria). Handshakes, rutas y estados contrastados con el código
+  de `alpaca-py`: `trade_updates` en `wss://paper-api.alpaca.markets/stream` con
+  `{"action":"authenticate","data":{"key_id","secret_key"}}` y `listen`; datos en
+  `wss://stream.data.alpaca.markets/v2/{iex|sip}` con `auth` y `subscribe` (`b` barras, `q` quotes, `u` barras
+  corregidas, ignoradas).
+- **Patas del bracket:** Alpaca les asigna ids propios; la plataforma las nombra `<entrada>-tp` / `<entrada>-sl`
+  y guarda el mapeo, así reinicios y reconciliación no dependen de ids inventados por el broker.
+- **Verificación de paper:** el adapter se niega a construirse si `paper` no es true o si el endpoint de trading
+  o de `trade_updates` no es `paper-api.alpaca.markets`; por eso `is_paper=True` es cierto por construcción.
+- **Órdenes:** `POST /v2/orders` de tipo market con `order_class=bracket`, `take_profit.limit_price`,
+  `stop_loss.stop_price` (redondeados al centavo), `time_in_force=day` y `client_order_id` determinista.
 - **Idempotencia:** Alpaca rechaza un `client_order_id` repetido → el adapter lo traduce a
   `DuplicateClientOrderId` y el execution engine recupera la orden existente por `client_order_id`.
 - **Eventos:** `trade_updates` (`new, fill, partial_fill, canceled, expired, replaced, rejected, pending_*`, …)

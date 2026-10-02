@@ -111,7 +111,7 @@ modelo de producción asumido.
 Criterio de salida: informe walk-forward **después de costes**, con intervalos de confianza y comparación contra
 baselines. La conclusión "JEV no tiene ventaja" es un resultado válido y se documentaría como tal.
 
-## Fase 4 — Alpaca Paper
+## Fase 4 — Alpaca Paper 🚧
 
 Prerrequisito del usuario: crear claves de **paper trading** en Alpaca y guardarlas en `.env`
 (`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`). Nunca en el repositorio ni en el chat.
@@ -125,6 +125,13 @@ Prerrequisito del usuario: crear claves de **paper trading** en Alpaca y guardar
 
 Criterio de salida: una sesión completa de paper con auditoría completa, reconciliación limpia al reiniciar
 y cero órdenes duplicadas.
+
+Estado (02/10/2026): implementados 1 a 4 con REST (httpx) y WebSockets (`websockets`) en lugar de `alpaca-py`; el
+handshake de los streams, las rutas y los estados de orden se contrastaron con el código del SDK oficial.
+Probado de punta a punta contra un Alpaca en memoria (`tests/fake_alpaca_live.py`): sesión con operaciones,
+reinicio con reconciliación limpia, cero órdenes duplicadas, reconexión con backfill y resincronización de
+fills perdidos, rechazo de endpoints no paper. Pendiente: la primera sesión real del usuario y los tests opt-in
+contra Alpaca Paper (punto 5).
 
 ## Fase 5 — Motor en tiempo real + API
 

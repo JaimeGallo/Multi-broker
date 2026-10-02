@@ -19,7 +19,8 @@ de ejecución.
 | 1 | Arquitectura, interfaces, entidades, configuración | ✅ |
 | 2 | Mock market + mock broker + pipeline completo en local | ✅ |
 | 3 | Datos históricos (Alpaca SIP), backtests y experimentos entre modelos | 🚧 en curso |
-| 4–10 | Alpaca Paper, API, dashboard, shadow, IBKR, comparación, live readiness | pendiente |
+| 4 | Alpaca Paper en tiempo real (datos IEX, órdenes bracket, reconciliación) | 🚧 en curso: falta la primera sesión real |
+| 5–10 | API, dashboard, shadow, IBKR, comparación, live readiness | pendiente |
 
 **Importante:** JEV aún no es un modelo validado. La versión incluida (`jev-heuristic 0.1.0`) es un sustituto
 transparente para ejercitar el pipeline; no se le atribuye ninguna ventaja. Los datos actuales son sintéticos.
@@ -52,7 +53,7 @@ pytest            # unit, contract, integration y e2e (offline, ~1 min)
 ruff check . && ruff format --check . && mypy
 ```
 
-`run` (paper trading contra Alpaca) llega en la Fase 4: hoy informa de ello y sale con código 2.
+`run` hace paper trading en tiempo real contra Alpaca (sección Fase 4).
 Con Docker: `cp .env.example .env`, definir `POSTGRES_PASSWORD` y `docker compose up --build` (PostgreSQL + Redis +
 motor ejecutando una simulación).
 
@@ -96,6 +97,34 @@ Auditoría de los experimentos (`--audit`):
 Antes de empezar, `experiment` estima el disco necesario y se niega si no cabe con 1 GB de margen. Si la base de
 datos falla de forma persistente (disco lleno), el trabajo se detiene y queda como FAILED en lugar de acumular
 registros en memoria (`persistence.max_buffered_records`).
+
+## Fase 4: paper trading en tiempo real (Alpaca)
+
+Datos reales del mercado y la cuenta **paper** de Alpaca: las órdenes las simula Alpaca y no se mueve dinero.
+El adaptador solo acepta `paper-api.alpaca.markets`; live sigue bloqueado en el código.
+
+```bash
+pip install -e ".[alpaca]"               # websockets para los streams en tiempo real
+# .env: APCA_API_KEY_ID / APCA_API_SECRET_KEY (las mismas claves paper de las descargas)
+python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml run              # hasta el cierre
+python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml run --minutes 30 # prueba corta
+```
+
+Qué hace `run`:
+
+1. Conecta con la cuenta paper, lee el calendario oficial y mide el desfase del reloj (más de 2 s bloquea las
+   entradas; en Windows: `w32tm /resync` como administrador).
+2. Si el mercado aún no abrió, espera a la apertura (`--no-wait` para salir); si ya cerró, informa y sale.
+3. Reconcilia órdenes y posiciones con Alpaca: cualquier orden o posición desconocida activa el kill switch.
+4. Calienta las features con las barras de la sesión anterior y de hoy (REST); con ellas nunca opera.
+5. Opera con el stream IEX: una decisión por barra, órdenes bracket (stop y objetivo en Alpaca), salidas por
+   horizonte y cierre 5 min antes del final. Imprime un resumen cada 5 min y otro al terminar.
+6. Ctrl+C detiene de forma segura: las posiciones abiertas conservan su stop y objetivo en Alpaca y el próximo
+   `run` las reconcilia.
+
+Feed IEX (gratis): precios reales de una sola bolsa; algunas barras faltan y el control de calidad bloquea
+entradas tras un hueco. Las comisiones reportadas son tasas regulatorias estimadas (Alpaca paper no cobra).
+El kill switch de paper es persistente entre ejecuciones: si se activa, revisar y `kill-switch reset`.
 
 ## JEV con TypeSafe (opcional, desactivado)
 

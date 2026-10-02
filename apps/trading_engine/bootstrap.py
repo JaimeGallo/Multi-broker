@@ -285,9 +285,77 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         options.database_url or config.persistence.database_url or "sqlite+aiosqlite:///:memory:"
     )
     await database.create_all()
+    parts = await assemble_engine(
+        config=config, run=run, clock=clock, calendar=calendar, bus=bus, market=market, router=router,
+        database=database, costs=costs, immediate_writes=False, simulated=True,
+    )  # fmt: skip
+    engine, repository, store, model = parts.engine, parts.repository, parts.store, parts.model
+    kill_switch, controls, execution = parts.kill_switch, parts.controls, parts.execution
+    runner = SimulationRunner(
+        engine=engine,
+        market_data=market,
+        broker=broker,
+        clock=clock,
+        symbols=list(trading.symbols),
+        timeframe=trading.timeframe,
+        pace_seconds=options.pace_seconds,
+        max_events=options.max_events,
+        on_session=options.on_session,
+    )
+    return EngineContext(
+        config=config,
+        run=run,
+        clock=clock,
+        calendar=calendar,
+        bus=bus,
+        market_data=market,
+        broker=broker,
+        router=router,
+        database=database,
+        repository=repository,
+        store=store,
+        model=model,
+        kill_switch=kill_switch,
+        controls=controls,
+        execution=execution,
+        engine=engine,
+        runner=runner,
+        dataset=dataset,
+    )
+
+
+@dataclass
+class EngineParts:
+    engine: TradingEngine
+    repository: AuditRepository
+    store: SqlOrderStore
+    model: JEVModel
+    kill_switch: KillSwitch
+    controls: TradingControls
+    execution: BrokerExecutionEngine
+
+
+async def assemble_engine(
+    *,
+    config: AppConfig,
+    run: RunContext,
+    clock: Clock,
+    calendar: RegularHoursCalendar,
+    bus: EventBus,
+    market: MarketDataAdapter,
+    router: BrokerRouter,
+    database: Database,
+    costs: CostModel,
+    immediate_writes: bool,
+    simulated: bool,
+) -> EngineParts:
+    """Everything between the adapters and the runner, identical in backtests and in real time. Backtests batch
+    the audit writes (`immediate_writes=False`); the barrier before every order is the same in both."""
+    mode = run.mode
+    trading = config.trading
     repository = AuditRepository(database, run_id=run.run_id, mode=mode)
     store = SqlOrderStore(database, mode=mode, run_id=run.run_id)
-    AuditRecorder(repository, config.persistence, immediate_writes=False).attach(bus)  # backtest: batched
+    AuditRecorder(repository, config.persistence, immediate_writes=immediate_writes).attach(bus)
     state_store = ScopedStateStore(repository, state_prefix(run))
 
     spec = FeatureSpec.from_config(config.features)
@@ -326,7 +394,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         asset_class=trading.asset_class,
     )
     health = build_health_monitor(
-        config=config, market_data=market, router=router, database=database, clock=clock, simulated=True
+        config=config, market_data=market, router=router, database=database, clock=clock, simulated=simulated
     )
     aggregator = BarAggregator(trading.timeframe, decision_tf) if decision_tf != trading.timeframe else None
     engine = TradingEngine(
@@ -345,7 +413,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         store=store,
         positions=positions,
         reconciler=Reconciler(execution=execution, store=store),
-        portfolio=PortfolioTracker(broker=broker.name),
+        portfolio=PortfolioTracker(broker=router.primary().name),
         ledger=TradeLedger(),
         outcomes=PredictionOutcomeTracker(),
         kill_switch=kill_switch,
@@ -355,37 +423,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         state_store=state_store,
         signal_loader=repository.load_signal,
     )
-    runner = SimulationRunner(
-        engine=engine,
-        market_data=market,
-        broker=broker,
-        clock=clock,
-        symbols=list(trading.symbols),
-        timeframe=trading.timeframe,
-        pace_seconds=options.pace_seconds,
-        max_events=options.max_events,
-        on_session=options.on_session,
-    )
-    return EngineContext(
-        config=config,
-        run=run,
-        clock=clock,
-        calendar=calendar,
-        bus=bus,
-        market_data=market,
-        broker=broker,
-        router=router,
-        database=database,
-        repository=repository,
-        store=store,
-        model=model,
-        kill_switch=kill_switch,
-        controls=controls,
-        execution=execution,
-        engine=engine,
-        runner=runner,
-        dataset=dataset,
-    )
+    return EngineParts(engine, repository, store, model, kill_switch, controls, execution)
 
 
 def performance_of(context: EngineContext) -> PerformanceReport:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from apps.trading_engine.cli import EXIT_FAILED, EXIT_OK, EXIT_REFUSED, main
+from apps.trading_engine.cli import EXIT_CONFIG, EXIT_FAILED, EXIT_OK, EXIT_REFUSED, main
 from packages.common.config import PROJECT_ROOT
 from tests.helpers import sqlite_url
 
@@ -83,11 +83,11 @@ def test_kill_switch_commands(tmp_path: Path) -> None:
     assert code == EXIT_OK and "engaged      False" in text
 
 
-def test_run_is_not_available_yet_and_live_is_refused(
+def test_run_needs_the_paper_profile_and_live_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     code, text = cli("run", db=tmp_path / "run.db")
-    assert code == EXIT_REFUSED and "phase 4" in text
+    assert code == EXIT_CONFIG and "alpaca-paper.yaml" in text  # the default config uses the mock broker
     monkeypatch.setenv("JEV__TRADING__MODE", "live")
     code, text = cli("run", db=tmp_path / "run.db")
     assert code == EXIT_REFUSED and "REFUSED" in text

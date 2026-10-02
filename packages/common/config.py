@@ -83,6 +83,7 @@ class AlpacaDataSection(Section):
     trading_url: str = "https://paper-api.alpaca.markets"  # paper only: used for the trading calendar
     page_limit: int = Field(default=10_000, ge=1, le=10_000)
     min_request_interval_seconds: float = Field(default=0.35, ge=0)  # Basic plan: 200 requests/minute
+    stream_url: str = "wss://stream.data.alpaca.markets/v2"  # real-time stream; the feed is appended (/iex)
 
 
 class HistoricalDataSection(Section):
@@ -108,10 +109,18 @@ class MockBrokerSection(Section):
     shortable_symbols: list[str] | None = None
 
 
+PAPER_TRADING_URL = "https://paper-api.alpaca.markets"
+PAPER_TRADING_STREAM_URL = "wss://paper-api.alpaca.markets/stream"
+
+
 class AlpacaSection(Section):
+    """Alpaca broker (phase 4). Paper only: any other endpoint is refused when the adapter is built."""
+
     enabled: bool = False
     paper: bool = True
-    feed: Literal["iex", "sip"] = "iex"
+    trading_url: str = PAPER_TRADING_URL
+    trading_stream_url: str = PAPER_TRADING_STREAM_URL
+    request_timeout_seconds: float = Field(default=10.0, gt=0)
 
 
 class IBKRSection(Section):

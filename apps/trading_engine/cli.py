@@ -12,7 +12,7 @@ import json
 import sys
 import tempfile
 from collections.abc import Sequence
-from datetime import date, time
+from datetime import date, time, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TextIO
@@ -20,6 +20,7 @@ from typing import Any, TextIO
 from apps.trading_engine.bootstrap import (
     CONTROLS_KEY,
     KILL_SWITCH_KEY,
+    MAX_CLOCK_SKEW_SECONDS,
     SimulationOptions,
     SimulationReport,
     build_calendar,
@@ -27,13 +28,22 @@ from apps.trading_engine.bootstrap import (
     run_simulation,
 )
 from apps.trading_engine.experiment import JobResult, run_experiment
+from apps.trading_engine.paper import (
+    PaperOptions,
+    PaperReport,
+    build_paper,
+    check_paper_config,
+    next_session,
+    run_paper,
+    session_label,
+)
 from apps.trading_engine.progress import ProgressBoard
 from packages.common.clock import SystemClock
 from packages.common.config import AppConfig, load_config
 from packages.common.enums import TradingMode
 from packages.common.errors import ConfigError, DataError, LiveTradingNotAllowed, SafetyError
 from packages.common.logging import configure_logging
-from packages.common.safety import enforce_mode_gate, mode_banner
+from packages.common.safety import mode_banner
 from packages.common.secrets import load_dotenv, redact_url, sensitive_values
 from packages.features.engine import FeatureEngine
 from packages.features.spec import FeatureSpec
@@ -45,6 +55,7 @@ from packages.market_data.spreads import DEFAULT_TIMES, calibrate_spreads, load_
 from packages.market_data.synthetic import SyntheticMarket
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository
+from packages.pipeline.realtime import RealtimeResult
 from packages.pipeline.replay import DecisionVerifier, VerificationResult
 from packages.risk.kill_switch import KillSwitch, KillSwitchReason, KillSwitchState
 
@@ -112,7 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     kill.add_argument("--note", default="", help="reason (required for reset)")
     kill.add_argument("--run-id", help="act on a backtest run's switch instead of the paper/shadow switch")
 
-    sub.add_parser("run", help="paper trading against a real broker (phase 4)")
+    run = sub.add_parser(
+        "run", help="paper trading in real time: Alpaca paper account + live market data (phase 4)"
+    )
+    run.add_argument(
+        "--minutes", type=float, help="stop after this many minutes (default: the session close)"
+    )
+    run.add_argument(
+        "--no-wait", action="store_true", help="exit instead of waiting when the market is not open yet"
+    )
+    run.add_argument("--run-id")
 
     data = sub.add_parser("data", help="download and inspect historical datasets (Alpaca)")
     data_sub = data.add_subparsers(dest="data_command", required=True)
@@ -414,12 +434,134 @@ async def cmd_kill_switch(args: argparse.Namespace, out: Console) -> int:
 
 async def cmd_run(args: argparse.Namespace, out: Console) -> int:
     config = _config(args)
-    enforce_mode_gate(config.trading.mode, config.broker.mode)
-    out.line(
-        "Paper trading against a real broker arrives in phase 4 (AlpacaBrokerAdapter, Alpaca Paper only)."
+    check_paper_config(config)
+    feed = config.market_data.alpaca.feed
+    out.line(mode_banner(TradingMode.PAPER, "alpaca", f"alpaca {feed}"))
+    out.line("  Real market data, Alpaca PAPER account: orders are simulated by Alpaca, no money moves.")
+    if feed == "iex":
+        out.line(
+            "  IEX feed: real prices from one exchange (a small share of the volume); bars may skip minutes."
+        )
+
+    def status(result: RealtimeResult) -> None:
+        engine = ctx.engine
+        counters = engine.counters
+        net = sum(t.net_pnl for t in engine.ledger.closed)
+        kill = "ENGAGED" if engine.kill_switch.engaged else "ok"
+        out.line(
+            f"  {ctx.clock.now().astimezone(ctx.calendar.timezone):%H:%M:%S}  bars {result.bars}  "
+            f"signals {counters.signals_generated}  entries {counters.entries_submitted}  fills {counters.fills}  "
+            f"open {engine.ledger.open_count}  trades {len(engine.ledger.closed)}  net {net:,.2f}  kill switch {kill}"
+        )
+
+    options = PaperOptions(
+        run_id=args.run_id,
+        database_url=_database_url(config),
+        max_duration=timedelta(minutes=args.minutes) if args.minutes else None,
+        on_status=status,
     )
-    out.line("Nothing was started. Use `simulate` to run the full pipeline on the synthetic market.")
-    return EXIT_REFUSED
+    ctx = await build_paper(config, options)
+    started = False
+    try:
+        account = await ctx.broker.get_account()
+        health = await ctx.broker.health()
+        skew = (
+            abs((health.server_time - ctx.clock.now()).total_seconds())
+            if health.server_time is not None
+            else None
+        )
+        out.line(
+            f"account           {account.account_ref} (paper)  equity {account.equity:,.2f}  buying power {account.buying_power:,.2f}"
+        )
+        out.line(f"model             {config.model.name}@{config.model.version} (no validated edge)")
+        out.line(f"symbols           {', '.join(config.trading.symbols)}")
+        out.line(f"session           {session_label(ctx.session, ctx.calendar)}")
+        out.line(f"database          {redact_url(config.persistence.database_url)}")
+        if skew is not None:
+            verdict = "ok" if skew <= MAX_CLOCK_SKEW_SECONDS else "TOO LARGE: trading stays blocked"
+            out.line(f"clock skew        {skew:.2f} s vs Alpaca ({verdict})")
+            if skew > MAX_CLOCK_SKEW_SECONDS:
+                out.line(
+                    "                  sync the computer clock first (Windows: w32tm /resync as administrator)"
+                )
+        now = ctx.clock.now()
+        session = ctx.session
+        if session is None or now >= session.close:
+            upcoming = next_session(ctx.calendar, now + timedelta(days=1) if session is not None else now)
+            label = session_label(upcoming, ctx.calendar) if upcoming else "unknown"
+            out.line(f"The market is closed for today. Next session: {label}. Nothing was started.")
+            return EXIT_OK
+        if now < session.open - timedelta(minutes=2):
+            wait = session.open - timedelta(minutes=2) - now
+            if args.no_wait:
+                out.line(f"The session opens in {_hours(wait)}. Nothing was started (--no-wait).")
+                return EXIT_OK
+            out.line(f"Waiting {_hours(wait)} for the open (Ctrl+C to cancel)...")
+            await asyncio.sleep(wait.total_seconds())
+        out.line(
+            "Starting: reconciliation with the broker, feature warm-up, then live trading. Ctrl+C stops safely."
+        )
+        started = True
+        report = await run_paper(ctx)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        out.line("")
+        out.line("Stopped by the user. Open positions keep their stop loss and take profit at Alpaca;")
+        out.line("the next `run` reconciles them before trading.")
+        return EXIT_OK
+    finally:
+        if not started:
+            await ctx.broker.disconnect()
+            await ctx.database.dispose()
+    print_paper_report(out, report, config)
+    return EXIT_OK if report.status == "COMPLETED" else EXIT_FAILED
+
+
+def _hours(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def print_paper_report(out: Console, report: PaperReport, config: AppConfig) -> None:
+    counters = report.summary["counters"]
+    kill = report.summary["kill_switch"]
+    result = report.result
+    trades = report.trades
+    net = sum(t.net_pnl for t in trades)
+    out.line("")
+    out.line(f"run_id            {report.run_id}")
+    out.line(f"status            {report.status}" + (f" ({result.stop_reason})" if result else ""))
+    if result is not None and result.error:
+        out.line(f"error             {result.error}")
+    if report.reconciliation is not None:
+        out.line(f"reconciliation    {report.reconciliation}")
+    if result is not None:
+        out.line(f"warm-up bars      {result.warmup_bars}")
+        out.line(f"live bars         {result.bars}  order events {result.order_events}")
+    out.line(
+        f"bars accepted     {counters['bars']}  rejected {counters['rejected_bars']}  quality {counters['quality']}"
+    )
+    out.line(f"signals           {counters['signals_generated']}  outcomes {counters['signal_outcomes']}")
+    out.line(f"no-trade reasons  {counters['no_trade']}")
+    out.line(f"risk rejections   {counters['risk_rejections']}")
+    out.line(
+        f"entries sent      {counters['entries_submitted']}  fills {counters['fills']}  trades {len(trades)}"
+    )
+    out.line(f"net pnl           {net:,.2f}  (fees are estimated regulatory fees; Alpaca paper charges none)")
+    if trades:
+        shortfall = sum(t.execution_shortfall for t in trades)
+        slippage = sum(t.entry_slippage_bps for t in trades) / len(trades)
+        out.line(f"execution         shortfall {shortfall:,.2f}  mean entry slippage {slippage:.2f} bps")
+    out.line(f"open positions    {report.summary['open_positions'] or 'none'}")
+    if kill.get("engaged"):
+        out.line(f"KILL SWITCH       ENGAGED: {kill['reason']} - {kill['detail']}")
+        out.line(
+            "                  it stays engaged across runs; review, then: kill-switch reset --note '...'"
+        )
+    else:
+        out.line("kill switch       not engaged")
+    out.line(
+        f"Inspect: python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml trace --list 10 --run-id {report.run_id}"
+    )
 
 
 async def cmd_jev_check(args: argparse.Namespace, out: Console) -> int:
@@ -722,6 +864,9 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     except LiveTradingNotAllowed as exc:
         out.line(f"REFUSED: {exc}")
         return EXIT_REFUSED
+    except KeyboardInterrupt:
+        out.line("interrupted")
+        return EXIT_FAILED
     except (ConfigError, SafetyError) as exc:
         out.line(f"configuration error: {exc}")
         return EXIT_CONFIG

@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.29"]
 typesafe = ["typesafe-sdk>=0.7,<0.8"]  # TypeSafe Jev adapter (disabled by default)
+alpaca = ["websockets>=13"]  # phase 4: real-time streams (REST calls use httpx)
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
@@ -30,7 +31,6 @@ dev = [
     "types-PyYAML",
 ]
 # Planned phases (not required yet):
-#   alpaca  = ["alpaca-py"]              Phase 4
 #   api     = ["fastapi", "uvicorn"]     Phase 5
 #   ml      = ["scikit-learn", "joblib"] Phase 3
 #   ibkr    = ["ib_async"]               Phase 8
