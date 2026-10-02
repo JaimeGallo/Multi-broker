@@ -357,9 +357,7 @@ async def cmd_jev_check(args: argparse.Namespace, out: Console) -> int:
         client = model.client
         if isinstance(client, SdkJevClient):
             names = await asyncio.to_thread(client.list_models)
-            out.line(f"models available  {', '.join(names) or 'none'}")
-            if model.params.api_model not in names:
-                out.line(f"WARNING           pinned api_model {model.params.api_model!r} is not in that list")
+            out.line(f"model aliases     {', '.join(names) or 'none'} (pinned versions are not listed)")
         day = next(calendar.sessions_between(date(2024, 3, 4), date(2024, 3, 8)))
         bars = [
             bar
@@ -376,7 +374,8 @@ async def cmd_jev_check(args: argparse.Namespace, out: Console) -> int:
             out.line(f"FAILED            {type(exc).__name__}: {exc}")
             return EXIT_FAILED
         elapsed_ms = (perf_counter() - started) * 1000
-    out.line(f"api model         {model.params.api_model}")
+    # The adapter rejects any answer from a model other than the pinned one, so reaching here confirms it.
+    out.line(f"api model         {model.params.api_model} (pinned version accepted and confirmed by the API)")
     out.line(
         f"decision          {prediction.direction.value}  p_up={prediction.probability_up:.3f} "
         f"p_down={prediction.probability_down:.3f} confidence={prediction.confidence:.3f}"

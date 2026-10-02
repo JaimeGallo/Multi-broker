@@ -41,8 +41,9 @@ aritmética, el conteo, las fechas y los estados grandes o ruidosos.
 3. Instalar el SDK oficial: `pip install -e ".[typesafe]"` (`typesafe-sdk` 0.7.x).
 4. Probar la integración con una llamada real:
    `python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml jev-check`
-   Muestra los modelos disponibles para tu cuenta (avisa si el fijado no está), la decisión, la latencia y los
-   tokens. Si `jev-1.13.0` no aparece, ajusta `api_model` en el perfil a un nombre de la lista.
+   Muestra los alias de modelo de tu cuenta (`jev-latest`, `jev-preview`; las versiones fijas como `jev-1.13.0` no
+   se listan pero se aceptan), la decisión, la latencia y los tokens. Si la API respondiera con otro modelo, la
+   llamada falla en lugar de mezclar versiones.
 5. Simular: `python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml simulate --start 2024-03-04`.
    El informe incluye llamadas a la API, aciertos de caché, tokens y coste estimado.
 6. Verificar: `python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml verify --run-id <run_id>`.
@@ -50,12 +51,16 @@ aritmética, el conteo, las fechas y los estados grandes o ruidosos.
 ## Coste
 
 Precio publicado al lanzamiento: USD 0,042 por millón de tokens de entrada; salida gratuita. Verifícalo antes de
-fiarte de los informes (`usd_per_million_input_tokens` en el perfil). Estimación con ~500 tokens por decisión:
+fiarte de los informes (`usd_per_million_input_tokens` en el perfil). Medido en la primera llamada real
+(02/10/2026): **743 tokens por decisión, ~USD 0,000031**, latencia ~330 ms.
 
 | Escenario | Decisiones | Coste aproximado |
 |---|---|---|
-| 1 día, 3 símbolos, barras de 1 min | ~1.170 | ~USD 0,02 |
-| Backtest de 1 año, 3 símbolos | ~295.000 | ~USD 6 |
+| 1 día, 3 símbolos, barras de 1 min | ~1.170 | ~USD 0,04 |
+| 1 mes, 3 símbolos | ~25.000 | ~USD 0,80 |
+| Backtest de 1 año, 3 símbolos | ~295.000 | ~USD 9 |
+
+Con USD 5 de créditos caben unas 160.000 decisiones (~135 días de 3 símbolos en barras de 1 minuto).
 
 Las re-ejecuciones sobre la misma caché no cuestan nada.
 
@@ -66,5 +71,5 @@ Las re-ejecuciones sobre la misma caché no cuestan nada.
   reintentos, por debajo del límite de latencia del kill switch (5 s).
 - **Sin datos reales todavía**: sobre el mercado sintético el resultado no dice nada; la evaluación seria es
   walk-forward con históricos y después de costes (Fase 3).
-- **Sin prueba en vivo desde el entorno de desarrollo**: el formato de petición y respuesta está verificado contra
-  el SDK oficial 0.7.2 con un transporte simulado; la primera llamada real es `jev-check` con tu clave.
+- **Probado en vivo** el 02/10/2026 con `jev-check` (Windows, Python 3.14): clave, modelo fijado, latencia y
+  coste confirmados. Los tests automáticos no llaman a la API (transporte simulado contra el SDK oficial 0.7.2).
