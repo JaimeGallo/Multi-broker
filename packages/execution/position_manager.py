@@ -17,7 +17,15 @@ from enum import StrEnum
 from packages.common.calendar import MarketCalendar
 from packages.common.config import ExecutionSection
 from packages.common.entities import Fill, Order, OrderRequest, RiskDecision, Signal
-from packages.common.enums import AssetClass, Direction, OrderIntent, OrderStatus, OrderType, Side, TimeInForce
+from packages.common.enums import (
+    AssetClass,
+    Direction,
+    OrderIntent,
+    OrderStatus,
+    OrderType,
+    Side,
+    TimeInForce,
+)
 from packages.common.ids import make_client_order_id
 from packages.execution.engine import BrokerExecutionEngine
 from packages.execution.order_store import OrderStore
@@ -104,7 +112,9 @@ class PositionManager:
 
     # ------------------------------------------------------------------ registry
 
-    def register_pending(self, signal: Signal, decision: RiskDecision, entry_client_order_id: str) -> ManagedPosition:
+    def register_pending(
+        self, signal: Signal, decision: RiskDecision, entry_client_order_id: str
+    ) -> ManagedPosition:
         position = ManagedPosition(
             signal_id=signal.signal_id,
             symbol=signal.symbol,
@@ -202,7 +212,9 @@ class PositionManager:
         if position.state is LifecycleState.EXITING:
             await self._progress_exit(position, order.updated_at)
 
-    async def on_timer(self, now: datetime, prices: Mapping[str, float], *, flatten_all: bool = False) -> None:
+    async def on_timer(
+        self, now: datetime, prices: Mapping[str, float], *, flatten_all: bool = False
+    ) -> None:
         session = self._calendar.session_for(now)
         for position in self.active():
             if position.state is LifecycleState.PENDING_ENTRY:
@@ -214,7 +226,9 @@ class PositionManager:
                 reason: OrderIntent | None = None
                 if flatten_all:
                     reason = OrderIntent.KILL_EXIT
-                elif session is None or session.minutes_to_close(now) <= self._cfg.flatten_minutes_before_close:
+                elif (
+                    session is None or session.minutes_to_close(now) <= self._cfg.flatten_minutes_before_close
+                ):
                     reason = OrderIntent.EOD_EXIT
                 elif self._cfg.exit_at_horizon and position.deadline is not None and now >= position.deadline:
                     reason = OrderIntent.TIME_EXIT
@@ -274,7 +288,9 @@ class PositionManager:
                 await self._exit_failure_listener(position, "max_exit_attempts_reached")
             return
         position.exit_attempts += 1
-        intent = position.exit_reason if position.exit_reason in MANAGED_EXIT_INTENTS else OrderIntent.RISK_EXIT
+        intent = (
+            position.exit_reason if position.exit_reason in MANAGED_EXIT_INTENTS else OrderIntent.RISK_EXIT
+        )
         assert intent is not None
         request = OrderRequest(
             client_order_id=make_client_order_id(position.signal_id, intent, position.exit_attempts),
@@ -296,7 +312,9 @@ class PositionManager:
 
     # ------------------------------------------------------------------ restart
 
-    def rebuild(self, orders: Sequence[Order], *, horizon: timedelta, signal_ttl: timedelta) -> list[ManagedPosition]:
+    def rebuild(
+        self, orders: Sequence[Order], *, horizon: timedelta, signal_ttl: timedelta
+    ) -> list[ManagedPosition]:
         """Reconstruct lifecycles from stored orders after a restart."""
         self._positions.clear()
         groups: dict[str, list[Order]] = {}
@@ -305,7 +323,9 @@ class PositionManager:
                 groups.setdefault(order.signal_id, []).append(order)
         restored: list[ManagedPosition] = []
         for signal_id, group in groups.items():
-            entry = next((o for o in group if o.intent is OrderIntent.ENTRY and o.parent_client_order_id is None), None)
+            entry = next(
+                (o for o in group if o.intent is OrderIntent.ENTRY and o.parent_client_order_id is None), None
+            )
             if entry is None:
                 continue
             exit_quantity = sum(o.filled_quantity for o in group if o.intent.is_exit)

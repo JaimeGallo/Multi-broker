@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import bindparam, func, inspect, select, update
+from sqlalchemy import Table, bindparam, func, inspect, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 
 from packages.common.config import AppConfig
@@ -121,25 +121,36 @@ class SqlOrderStore:
             if row is None:
                 session.add(
                     OrderRow(
-                        client_order_id=order.client_order_id, mode=self._mode.value, run_id=self._run_id, **values
+                        client_order_id=order.client_order_id,
+                        mode=self._mode.value,
+                        run_id=self._run_id,
+                        **values,
                     )
                 )
             else:
                 for key, value in values.items():
                     setattr(row, key, value)
 
+    def _scoped(self) -> Any:
+        """Orders of this engine only: one run in backtest/replay, every run of the mode in paper/shadow
+        (their ids are stable across restarts). Other runs sharing the database are never reconciled."""
+        statement = select(OrderRow).where(OrderRow.mode == self._mode.value)
+        if self._mode in BACKTEST_MODES:
+            statement = statement.where(OrderRow.run_id == self._run_id)
+        return statement
+
     async def list_open(self, broker: str | None = None) -> list[Order]:
-        statement = select(OrderRow).where(OrderRow.status.not_in(TERMINAL_STATUSES))
+        statement = self._scoped().where(OrderRow.status.not_in(TERMINAL_STATUSES))
         if broker is not None:
             statement = statement.where(OrderRow.broker == broker)
         return await self._query(statement.order_by(OrderRow.created_at))
 
     async def list_by_signal(self, signal_id: str) -> list[Order]:
-        statement = select(OrderRow).where(OrderRow.signal_id == signal_id).order_by(OrderRow.created_at)
+        statement = self._scoped().where(OrderRow.signal_id == signal_id).order_by(OrderRow.created_at)
         return await self._query(statement)
 
     async def list_all(self) -> list[Order]:
-        return await self._query(select(OrderRow).order_by(OrderRow.created_at))
+        return await self._query(self._scoped().order_by(OrderRow.created_at))
 
     async def _query(self, statement: Any) -> list[Order]:
         async with self._db.sessions() as session:
@@ -171,7 +182,9 @@ class AuditRepository:
         async with self._db.sessions() as session, session.begin():
             await session.execute(self._insert(model).on_conflict_do_nothing(), [dict(r) for r in rows])
 
-    async def _upsert(self, model: type[Base], rows: Sequence[Mapping[str, Any]], keys: Sequence[str]) -> None:
+    async def _upsert(
+        self, model: type[Base], rows: Sequence[Mapping[str, Any]], keys: Sequence[str]
+    ) -> None:
         if not rows:
             return
         statement = self._insert(model)
@@ -280,7 +293,8 @@ class AuditRepository:
             row = (
                 await session.execute(
                     select(ModelVersionRow).where(
-                        ModelVersionRow.model_name == model_name, ModelVersionRow.model_version == model_version
+                        ModelVersionRow.model_name == model_name,
+                        ModelVersionRow.model_version == model_version,
                     )
                 )
             ).scalar_one_or_none()
@@ -351,7 +365,7 @@ class AuditRepository:
     async def update_prediction_outcomes(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
             return
-        table = PredictionRow.__table__
+        table = cast(Table, PredictionRow.__table__)  # Core table: executemany with custom bind names
         statement = (
             update(table)
             .where(table.c.prediction_id == bindparam("b_id"))
@@ -608,31 +622,41 @@ class AuditRepository:
             if signal is None:
                 return None
             prediction = await session.get(PredictionRow, signal.prediction_id)
-            features = await session.get(FeatureRow, prediction.feature_id) if prediction is not None else None
+            features = (
+                await session.get(FeatureRow, prediction.feature_id) if prediction is not None else None
+            )
             bars: list[dict[str, Any]] = []
             if features is not None:
                 bar_rows = (
-                    await session.execute(
-                        select(MarketBarRow)
-                        .where(
-                            MarketBarRow.symbol == features.symbol,
-                            MarketBarRow.timeframe == features.timeframe,
-                            MarketBarRow.source == features.source,
-                            MarketBarRow.start >= features.window_start,
-                            MarketBarRow.start < features.window_end,
+                    (
+                        await session.execute(
+                            select(MarketBarRow)
+                            .where(
+                                MarketBarRow.symbol == features.symbol,
+                                MarketBarRow.timeframe == features.timeframe,
+                                MarketBarRow.source == features.source,
+                                MarketBarRow.start >= features.window_start,
+                                MarketBarRow.start < features.window_end,
+                            )
+                            .order_by(MarketBarRow.start)
                         )
-                        .order_by(MarketBarRow.start)
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 bars = [row_to_dict(row) for row in bar_rows]
             decision = (
                 await session.execute(select(RiskDecisionRow).where(RiskDecisionRow.signal_id == signal_id))
             ).scalar_one_or_none()
             orders = (
-                await session.execute(
-                    select(OrderRow).where(OrderRow.signal_id == signal_id).order_by(OrderRow.created_at)
+                (
+                    await session.execute(
+                        select(OrderRow).where(OrderRow.signal_id == signal_id).order_by(OrderRow.created_at)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             order_ids = [o.client_order_id for o in orders]
             events = (
                 (

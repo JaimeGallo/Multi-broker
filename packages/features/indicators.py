@@ -67,7 +67,9 @@ def atr_last(high: FloatArray, low: FloatArray, close: FloatArray, period: int =
     return float(wilder_series(true_range(high, low, close)[1:], period)[-1])
 
 
-def adx_last(high: FloatArray, low: FloatArray, close: FloatArray, period: int = 14) -> tuple[float, float, float]:
+def adx_last(
+    high: FloatArray, low: FloatArray, close: FloatArray, period: int = 14
+) -> tuple[float, float, float]:
     """Return (ADX, +DI, -DI). Needs at least 2*period+1 bars."""
     if len(close) < 2 * period + 1:
         return NAN, NAN, NAN
@@ -91,7 +93,9 @@ def adx_last(high: FloatArray, low: FloatArray, close: FloatArray, period: int =
     return float(adx), pdi, mdi
 
 
-def macd_last(close: FloatArray, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[float, float, float]:
+def macd_last(
+    close: FloatArray, fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[float, float, float]:
     """Return (MACD line, signal line, histogram)."""
     if len(close) < slow + signal:
         return NAN, NAN, NAN

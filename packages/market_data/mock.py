@@ -108,7 +108,11 @@ class MockMarketDataAdapter(MarketDataAdapter):
             bad_close = round(bar.close * (1.25 if rng.random() < 0.5 else 0.8), 2)
             emitted = [
                 bar.model_copy(
-                    update={"close": bad_close, "high": max(bar.high, bad_close), "low": min(bar.low, bad_close)}
+                    update={
+                        "close": bad_close,
+                        "high": max(bar.high, bad_close),
+                        "low": min(bar.low, bad_close),
+                    }
                 )
             ]
         if cfg.duplicate_rate and rng.random() < cfg.duplicate_rate:

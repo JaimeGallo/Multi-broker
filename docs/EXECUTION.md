@@ -140,21 +140,21 @@ la cantidad pendiente se recalcula y no se envía una orden de más.
 
 ## 8. Matriz de recuperación ante fallos (spec §53)
 
-"test ✅" = cobertura prevista en la Fase 2 (en implementación).
+"test ✅" = cubierto por tests automáticos (`tests/integration/test_recovery.py` salvo indicación).
 
 | Escenario | Comportamiento | Cobertura |
 |---|---|---|
 | Petición de orden duplicada | se devuelve la orden existente | test ✅ |
 | Timeout de envío (antes/después de aceptar) | consulta + adopción o reintento con el mismo id | test ✅ |
 | Reinicio del worker | reconciliación de órdenes, posiciones, exposición y PnL diario | test ✅ |
-| Fill parcial | fills por acumulada; entrada parcial terminada → cierre del remanente | test ✅ (máquina de estados) |
-| Broker desconectado | health `broker_connected` falla → sin entradas → kill switch tras 60 s | test ✅ (sin entradas) |
+| Fill parcial | fills por acumulada; entrada parcial terminada → cierre del remanente | test ✅ fills por acumulada (`tests/unit/test_state_machine_and_ids.py`); el cierre del remanente aún no se ejercita (las entradas bracket del mock se llenan completas) |
+| Broker desconectado | health `broker_connected` falla → sin entradas → kill switch tras 60 s | test ✅ |
 | Posición / orden inesperada | kill switch | test ✅ |
 | Caída de la base de datos | la barrera de auditoría falla → sin orden + kill switch | test ✅ |
 | Desconexión de WebSocket | reconexión + backfill + reconciliación | Fase 4 (Alpaca) |
 | Reinicio de API / Redis / PostgreSQL | reconexión; sin DB no se opera | Fase 5 |
 | Fallo de red | `AmbiguousSubmission` / `BrokerUnavailable` según el punto de fallo | Fase 4 |
-| Timeout de orden sin ack | reconsulta tras `ack_timeout_seconds`; si sigue sin conocerse → `ERROR` | parcial ✅ |
+| Timeout de orden sin ack | reconsulta tras `ack_timeout_seconds`; si sigue sin conocerse → `ERROR` | test ✅ |
 
 ## 9. Modelo de fills y costes
 

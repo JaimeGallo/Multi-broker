@@ -29,8 +29,8 @@ from packages.common.enums import (
     RiskVerdict,
     Side,
     SignalStatus,
-    TimeInForce,
     Timeframe,
+    TimeInForce,
 )
 from packages.common.errors import InvalidSignalTransition
 

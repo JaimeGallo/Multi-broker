@@ -1,6 +1,6 @@
 # JEV Real-Time Trading Engine — Arquitectura
 
-> **Estado:** v0.1 en desarrollo — Fases 0 y 1 completadas; Fase 2 (mocks + pipeline local) en implementación.
+> **Estado:** v0.1 — Fases 0, 1 y 2 completadas (mocks + pipeline local funcionando de punta a punta).
 > En este documento ✅ marca el alcance de las Fases 1–2. El sistema solo operará en **BACKTEST** sobre datos
 > sintéticos con un broker simulado. **Live trading no existe en este código** y está bloqueado por diseño.
 

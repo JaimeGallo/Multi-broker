@@ -50,7 +50,9 @@ class TradeLedger:
 
     def register(self, signal: Signal, decision: RiskDecision) -> None:
         self._open[signal.signal_id] = _OpenTrade(
-            signal=signal.model_copy(deep=True), take_profit=decision.take_profit, stop_loss=decision.stop_loss
+            signal=signal.model_copy(deep=True),
+            take_profit=decision.take_profit,
+            stop_loss=decision.stop_loss,
         )
 
     def restore(

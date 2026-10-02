@@ -56,7 +56,8 @@ class SyntheticMarket:
     ) -> Iterator[tuple[datetime, list[MarketBar], list[MarketQuote]]]:
         """Yield `(timestamp, bars ending at timestamp, quotes at timestamp)` in time order."""
         states = {
-            s: _SymbolState(price=self._cfg.start_price, regime=0, rng=_symbol_rng(self._cfg.seed, s)) for s in symbols
+            s: _SymbolState(price=self._cfg.start_price, regime=0, rng=_symbol_rng(self._cfg.seed, s))
+            for s in symbols
         }
         first_session = True
         for session in self._calendar.sessions_between(start, end):

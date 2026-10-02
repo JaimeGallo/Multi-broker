@@ -84,8 +84,12 @@ class StandardRiskEngine(RiskEngine):
         check("trading_not_paused", not ctx.trading_paused)
         check("system_health", ctx.health_ok, ctx.health_detail)
         check("signal_eligible", signal.status is SignalStatus.ELIGIBLE, signal.status.value)
-        check("signal_not_expired", ctx.now <= signal.expires_at, f"expires_at={signal.expires_at.isoformat()}")
-        directional = check("direction_tradable", signal.direction is not Direction.NO_TRADE, signal.direction.value)
+        check(
+            "signal_not_expired", ctx.now <= signal.expires_at, f"expires_at={signal.expires_at.isoformat()}"
+        )
+        directional = check(
+            "direction_tradable", signal.direction is not Direction.NO_TRADE, signal.direction.value
+        )
         check("instrument_tradable", ctx.instrument.tradable)
         if signal.direction is Direction.SHORT:
             check("short_allowed", cfg.allow_short and ctx.broker_capabilities.supports_short)
@@ -107,21 +111,37 @@ class StandardRiskEngine(RiskEngine):
         last_equity = ctx.account.last_equity
         daily_pnl = equity - last_equity
         daily_limit = -cfg.max_daily_loss * last_equity
-        check("daily_loss_limit", daily_pnl > daily_limit, f"daily_pnl={daily_pnl:.2f}", daily_pnl, daily_limit)
+        check(
+            "daily_loss_limit", daily_pnl > daily_limit, f"daily_pnl={daily_pnl:.2f}", daily_pnl, daily_limit
+        )
         peak = max(ctx.peak_equity, equity)
         drawdown = 1.0 - equity / peak if peak > 0 else 0.0
-        check("max_drawdown", drawdown < cfg.max_drawdown, f"drawdown={drawdown:.4f}", drawdown, cfg.max_drawdown)
+        check(
+            "max_drawdown",
+            drawdown < cfg.max_drawdown,
+            f"drawdown={drawdown:.4f}",
+            drawdown,
+            cfg.max_drawdown,
+        )
 
         # Concentration
         active = {s for s, q in ctx.positions.items() if abs(q) > EPSILON} | set(ctx.pending_entry_symbols)
-        check("max_open_positions", len(active) < cfg.max_open_positions, "", len(active), cfg.max_open_positions)
+        check(
+            "max_open_positions",
+            len(active) < cfg.max_open_positions,
+            "",
+            len(active),
+            cfg.max_open_positions,
+        )
         check("no_position_in_symbol", signal.symbol not in active)
 
         # Stops, targets and size
         side = signal.direction.entry_side if directional else None
         atr = ctx.atr
         atr_ok = check(
-            "atr_available", atr is not None and math.isfinite(atr) and atr > 0, value=atr if atr is not None else None
+            "atr_available",
+            atr is not None and math.isfinite(atr) and atr > 0,
+            value=atr if atr is not None else None,
         )
         stop_loss = take_profit = stop_distance = risk_reward = None
         quantity = 0.0
@@ -145,7 +165,13 @@ class StandardRiskEngine(RiskEngine):
             check("stop_on_correct_side", correct_side, f"sl={stop_loss} tp={take_profit} ref={price}")
             stop_distance = abs(price - stop_loss)
             risk_reward = abs(take_profit - price) / stop_distance if stop_distance > 0 else 0.0
-            check("risk_reward", risk_reward >= cfg.min_risk_reward - EPSILON, "", risk_reward, cfg.min_risk_reward)
+            check(
+                "risk_reward",
+                risk_reward >= cfg.min_risk_reward - EPSILON,
+                "",
+                risk_reward,
+                cfg.min_risk_reward,
+            )
 
             increment = ctx.instrument.quantity_increment
             caps = {
@@ -169,7 +195,13 @@ class StandardRiskEngine(RiskEngine):
             binding = min(caps, key=lambda name: caps[name])
             quantity = max(0.0, caps[binding])
             detail = " ".join(f"{name}={value:g}" for name, value in caps.items()) + f" binding={binding}"
-            check("position_size", quantity >= ctx.instrument.min_quantity, detail, quantity, ctx.instrument.min_quantity)
+            check(
+                "position_size",
+                quantity >= ctx.instrument.min_quantity,
+                detail,
+                quantity,
+                ctx.instrument.min_quantity,
+            )
             exposure_after = ctx.gross_exposure + quantity * price
             max_exposure = equity * cfg.max_total_exposure
             check("total_exposure", exposure_after <= max_exposure + 1e-6, "", exposure_after, max_exposure)

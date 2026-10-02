@@ -153,7 +153,11 @@ class MarketDataEngine:
             return 0
         previous_session = self._calendar.session_for(last.start)
         current_session = self._calendar.session_for(bar.start)
-        if previous_session is not None and current_session is not None and previous_session.day == current_session.day:
+        if (
+            previous_session is not None
+            and current_session is not None
+            and previous_session.day == current_session.day
+        ):
             return int((bar.start - expected) / step)
         missing = 0
         if previous_session is not None:

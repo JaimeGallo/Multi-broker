@@ -120,7 +120,9 @@ def compute_performance(
     equity_curve = [s.equity for s in ordered]
     first_equity = start_equity if start_equity is not None else (equity_curve[0] if equity_curve else None)
     last_equity = equity_curve[-1] if equity_curve else None
-    days = (ordered[-1].timestamp - ordered[0].timestamp).total_seconds() / 86_400 if len(ordered) > 1 else None
+    days = (
+        (ordered[-1].timestamp - ordered[0].timestamp).total_seconds() / 86_400 if len(ordered) > 1 else None
+    )
     rets = daily_returns(ordered, trading_date, first_equity) if first_equity else []
     total_return = last_equity / first_equity - 1.0 if first_equity and last_equity else None
     growth = cagr(first_equity, last_equity, days) if first_equity and last_equity and days else None

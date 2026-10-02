@@ -54,7 +54,9 @@ class CostModel:
         bar_seconds: float,
     ) -> CostEstimate:
         cfg = self.config
-        commission_bps = 2.0 * (cfg.commission_per_share / price * 1e4 + cfg.commission_bps) if price > 0 else 0.0
+        commission_bps = (
+            2.0 * (cfg.commission_per_share / price * 1e4 + cfg.commission_bps) if price > 0 else 0.0
+        )
         regulatory_bps = cfg.sec_fee_rate * 1e4 + (cfg.taf_per_share / price * 1e4 if price > 0 else 0.0)
         vol = volatility_per_bar if math.isfinite(volatility_per_bar) and volatility_per_bar > 0 else 0.0
         latency_fraction = math.sqrt((cfg.latency_ms / 1000.0) / bar_seconds) if bar_seconds > 0 else 0.0

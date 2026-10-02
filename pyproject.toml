@@ -50,7 +50,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
-ignore = ["RUF001", "RUF002", "RUF003"]
+# E501: `ruff format` owns line length; it leaves long docstrings and literals alone on purpose.
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"

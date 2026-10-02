@@ -81,7 +81,9 @@ class DataQualityEngine:
             if quote.bid <= 0 or quote.ask <= 0 or quote.ask <= quote.bid:
                 issues.append(DataIssue(code="crossed_or_locked_quote", status=DEGRADED))
             elif quote.spread_bps > cfg.max_spread_bps:
-                issues.append(DataIssue(code="wide_spread", status=DEGRADED, detail=f"{quote.spread_bps:.1f}bps"))
+                issues.append(
+                    DataIssue(code="wide_spread", status=DEGRADED, detail=f"{quote.spread_bps:.1f}bps")
+                )
             if (now - quote.timestamp).total_seconds() > cfg.max_bar_delay_seconds:
                 issues.append(DataIssue(code="stale_quote", status=DEGRADED))
 

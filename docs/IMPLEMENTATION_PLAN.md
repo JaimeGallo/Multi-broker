@@ -10,7 +10,7 @@ Nunca `JEV → dinero real`.
 |---|---|---|
 | 0 | Inspección | ✅ repositorio vacío; JEV no existía |
 | 1 | Arquitectura, interfaces, entidades, DB, eventos, configuración | ✅ |
-| 2 | Mock market + mock broker + pipeline completo en local | 🚧 en curso |
+| 2 | Mock market + mock broker + pipeline completo en local | ✅ |
 | 3 | Backtesting real, walk-forward, baselines, JEV v1 entrenado | pendiente |
 | 4 | Alpaca Paper (market data + broker) + runner en tiempo real | pendiente — requiere claves paper del usuario |
 | 5 | Motor en tiempo real endurecido + API + WebSockets + métricas | pendiente |
@@ -34,7 +34,7 @@ Entregables: `ARCHITECTURE.md`, `BROKER_ARCHITECTURE.md`, `RISK.md`, `EXECUTION.
 `MarketDataAdapter`, `BrokerAdapter`, `ExecutionEngine`, `JEVModel`, `RiskEngine`; entidades normalizadas;
 esquema de base de datos; bus de eventos; configuración validada; puerta de seguridad para live.
 
-## Fase 2 — Mock market y pipeline local 🚧
+## Fase 2 — Mock market y pipeline local ✅
 
 Entregables:
 
@@ -48,6 +48,12 @@ Entregables:
 
 Criterio de salida: `pytest` en verde; una simulación deja la cadena de auditoría completa para cada orden y
 `verify` reproduce exactamente las decisiones.
+
+Resultado: cumplido. 124 tests (unit, contract, integration, e2e) en verde junto con `ruff` y `mypy`; una
+simulación de un día con dos símbolos reproduce el 100 % de sus decisiones con `verify`, en SQLite y en
+PostgreSQL 16. Hallazgos corregidos durante la fase: las salidas por horizonte no cancelaban el bracket
+(el broker las rechazaba y se activaba el kill switch) y el `SqlOrderStore` reconciliaba órdenes de otros runs
+de la misma base de datos.
 
 ## Fase 3 — Backtesting y validación de JEV
 

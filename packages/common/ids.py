@@ -49,7 +49,9 @@ def _stamp(timestamp: datetime) -> str:
     return timestamp.strftime("%Y%m%d%H%M")
 
 
-def make_feature_id(namespace: str, symbol: str, timestamp: datetime, feature_version: str, spec_hash: str) -> str:
+def make_feature_id(
+    namespace: str, symbol: str, timestamp: datetime, feature_version: str, spec_hash: str
+) -> str:
     code = digest(namespace, symbol, timestamp.isoformat(), feature_version, spec_hash, length=8)
     return f"F-{compact_symbol(symbol)}-{_stamp(timestamp)}-{code}"
 

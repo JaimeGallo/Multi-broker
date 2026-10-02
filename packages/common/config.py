@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from packages.common.enums import AssetClass, MarketRegime, TimeInForce, Timeframe, TradingMode
+from packages.common.enums import AssetClass, MarketRegime, Timeframe, TimeInForce, TradingMode
 from packages.common.errors import ConfigError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -167,9 +167,9 @@ class CostsSection(Section):
 
 
 class SizingSection(Section):
-    method: Literal["fixed_risk", "fixed_fraction", "volatility_adjusted", "risk_parity", "fractional_kelly"] = (
-        "fixed_risk"
-    )
+    method: Literal[
+        "fixed_risk", "fixed_fraction", "volatility_adjusted", "risk_parity", "fractional_kelly"
+    ] = "fixed_risk"
     kelly_enabled: bool = False
     kelly_fraction: float = Field(default=0.25, gt=0, le=1)
 

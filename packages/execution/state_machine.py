@@ -17,12 +17,29 @@ _S = OrderStatus
 
 ALLOWED_TRANSITIONS: dict[OrderStatus, frozenset[OrderStatus]] = {
     _S.CREATED: frozenset(
-        {_S.SUBMITTED, _S.ACKNOWLEDGED, _S.PARTIALLY_FILLED, _S.FILLED, _S.CANCEL_REQUESTED, _S.CANCELLED,
-         _S.REJECTED, _S.EXPIRED, _S.ERROR}
+        {
+            _S.SUBMITTED,
+            _S.ACKNOWLEDGED,
+            _S.PARTIALLY_FILLED,
+            _S.FILLED,
+            _S.CANCEL_REQUESTED,
+            _S.CANCELLED,
+            _S.REJECTED,
+            _S.EXPIRED,
+            _S.ERROR,
+        }
     ),
     _S.SUBMITTED: frozenset(
-        {_S.ACKNOWLEDGED, _S.PARTIALLY_FILLED, _S.FILLED, _S.CANCEL_REQUESTED, _S.CANCELLED, _S.REJECTED,
-         _S.EXPIRED, _S.ERROR}
+        {
+            _S.ACKNOWLEDGED,
+            _S.PARTIALLY_FILLED,
+            _S.FILLED,
+            _S.CANCEL_REQUESTED,
+            _S.CANCELLED,
+            _S.REJECTED,
+            _S.EXPIRED,
+            _S.ERROR,
+        }
     ),
     _S.ACKNOWLEDGED: frozenset(
         {_S.PARTIALLY_FILLED, _S.FILLED, _S.CANCEL_REQUESTED, _S.CANCELLED, _S.REJECTED, _S.EXPIRED, _S.ERROR}
@@ -32,8 +49,16 @@ ALLOWED_TRANSITIONS: dict[OrderStatus, frozenset[OrderStatus]] = {
         {_S.ACKNOWLEDGED, _S.PARTIALLY_FILLED, _S.FILLED, _S.CANCELLED, _S.EXPIRED, _S.ERROR}
     ),
     _S.ERROR: frozenset(
-        {_S.SUBMITTED, _S.ACKNOWLEDGED, _S.PARTIALLY_FILLED, _S.FILLED, _S.CANCEL_REQUESTED, _S.CANCELLED,
-         _S.REJECTED, _S.EXPIRED}
+        {
+            _S.SUBMITTED,
+            _S.ACKNOWLEDGED,
+            _S.PARTIALLY_FILLED,
+            _S.FILLED,
+            _S.CANCEL_REQUESTED,
+            _S.CANCELLED,
+            _S.REJECTED,
+            _S.EXPIRED,
+        }
     ),
     _S.FILLED: frozenset(),
     _S.CANCELLED: frozenset(),
@@ -70,10 +95,14 @@ def apply_snapshot(
 ) -> AppliedUpdate:
     """Merge the broker's view of an order into the local record."""
     if order.is_terminal:
-        changed = snapshot.status != order.status or snapshot.filled_quantity > order.filled_quantity + EPSILON
+        changed = (
+            snapshot.status != order.status or snapshot.filled_quantity > order.filled_quantity + EPSILON
+        )
         return AppliedUpdate(order, None, False, "update_after_terminal_state" if changed else None)
     if not can_transition(order.status, snapshot.status):
-        return AppliedUpdate(order, None, False, f"invalid_transition:{order.status.value}->{snapshot.status.value}")
+        return AppliedUpdate(
+            order, None, False, f"invalid_transition:{order.status.value}->{snapshot.status.value}"
+        )
     delta = snapshot.filled_quantity - order.filled_quantity
     if delta < -EPSILON:
         return AppliedUpdate(order, None, False, "cumulative_quantity_decreased")
@@ -99,7 +128,9 @@ def apply_snapshot(
             new_notional = snapshot.filled_quantity * (snapshot.average_fill_price or 0.0)
             price = (new_notional - previous_notional) / delta
         updated.filled_quantity = snapshot.filled_quantity
-        updated.average_fill_price = snapshot.average_fill_price if snapshot.average_fill_price is not None else price
+        updated.average_fill_price = (
+            snapshot.average_fill_price if snapshot.average_fill_price is not None else price
+        )
         fill = Fill(
             fill_id=fill_id_for(order.client_order_id, snapshot.filled_quantity),
             client_order_id=order.client_order_id,

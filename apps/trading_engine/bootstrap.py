@@ -6,6 +6,7 @@ broker for Alpaca (phase 4) or IBKR (phase 8) only changes what is constructed h
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -99,7 +100,9 @@ def build_health_monitor(
     async def market_data_connected() -> HealthCheckResult:
         state = await market_data.health()
         return HealthCheckResult(
-            "market_data_connected", HealthState.OK if state.connected else HealthState.FAIL, state.status.value
+            "market_data_connected",
+            HealthState.OK if state.connected else HealthState.FAIL,
+            state.status.value,
         )
 
     def broker_check(name: str, attribute: str) -> Any:
@@ -119,8 +122,12 @@ def build_health_monitor(
 
     async def redis_available() -> HealthCheckResult:
         if config.redis.url is None:
-            return HealthCheckResult("redis_available", HealthState.NOT_APPLICABLE, "not configured", critical=False)
-        return HealthCheckResult("redis_available", HealthState.DEGRADED, "redis arrives in phase 5", critical=False)
+            return HealthCheckResult(
+                "redis_available", HealthState.NOT_APPLICABLE, "not configured", critical=False
+            )
+        return HealthCheckResult(
+            "redis_available", HealthState.DEGRADED, "redis arrives in phase 5", critical=False
+        )
 
     async def clock_synchronized() -> HealthCheckResult:
         if simulated:
@@ -136,7 +143,9 @@ def build_health_monitor(
     health.register("market_data_connected", market_data_connected)
     health.register("broker_connected", broker_check("broker_connected", "connected"))
     health.register("account_available", broker_check("account_available", "account_available"))
-    health.register("order_stream_connected", broker_check("order_stream_connected", "order_stream_connected"))
+    health.register(
+        "order_stream_connected", broker_check("order_stream_connected", "order_stream_connected")
+    )
     health.register("database_available", database_available)
     health.register("redis_available", redis_available)
     health.register("clock_synchronized", clock_synchronized)
@@ -192,7 +201,9 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
     mode = TradingMode.BACKTEST
     enforce_mode_gate(mode, config.broker.mode)
     if config.market_data.provider != "mock":
-        raise ConfigError("simulations run on the mock market in phase 2 (historical data arrives in phase 3)")
+        raise ConfigError(
+            "simulations run on the mock market in phase 2 (historical data arrives in phase 3)"
+        )
     if options.end < options.start:
         raise ConfigError("end date must not be before start date")
     trading = config.trading
@@ -202,7 +213,9 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         raise ConfigError(f"no trading session between {options.start} and {options.end}")
     clock = SimulatedClock(first.open)
     git_commit = options.git_commit if options.git_commit is not None else detect_git_commit()
-    run = RunContext.create(config, mode=mode, started_at=clock.now(), run_id=options.run_id, git_commit=git_commit)
+    run = RunContext.create(
+        config, mode=mode, started_at=clock.now(), run_id=options.run_id, git_commit=git_commit
+    )
 
     bus = EventBus()
     costs = CostModel(config.costs)
@@ -220,7 +233,9 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
     if not isinstance(broker, MockBrokerAdapter):
         raise ConfigError("simulations need the mock broker as the simulated exchange")
 
-    database = Database(options.database_url or config.persistence.database_url or "sqlite+aiosqlite:///:memory:")
+    database = Database(
+        options.database_url or config.persistence.database_url or "sqlite+aiosqlite:///:memory:"
+    )
     await database.create_all()
     repository = AuditRepository(database, run_id=run.run_id, mode=mode)
     store = SqlOrderStore(database, mode=mode, run_id=run.run_id)
@@ -256,7 +271,11 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         router=router, store=store, clock=clock, bus=bus, config=config.execution, strategy=run.strategy
     )
     positions = PositionManager(
-        execution=execution, store=store, calendar=calendar, config=config.execution, asset_class=trading.asset_class
+        execution=execution,
+        store=store,
+        calendar=calendar,
+        config=config.execution,
+        asset_class=trading.asset_class,
     )
     health = build_health_monitor(
         config=config, market_data=market, router=router, database=database, clock=clock, simulated=True
@@ -368,10 +387,8 @@ async def run_simulation(
             broker_submissions=ctx.execution.broker_submissions,
         )
     except BaseException:
-        try:
+        with contextlib.suppress(Exception):  # the original error matters more than this bookkeeping
             await repo.finish_run(stopped_at=ctx.clock.now(), status=status, summary={})
-        except Exception:
-            pass
         raise
     finally:
         await ctx.database.dispose()

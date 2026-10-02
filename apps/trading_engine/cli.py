@@ -165,17 +165,25 @@ def print_report(out: Console, report: SimulationReport, config: AppConfig) -> N
     out.line(f"status            {report.status}")
     out.line(f"model             {config.model.name}@{config.model.version} (stand-in, no validated edge)")
     out.line(f"database          {redact_url(config.persistence.database_url)}")
-    out.line(f"market events     {report.result.events}  ({report.result.first_timestamp} -> {report.result.last_timestamp})")
+    out.line(
+        f"market events     {report.result.events}  ({report.result.first_timestamp} -> {report.result.last_timestamp})"
+    )
     out.line(f"bars accepted     {counters['bars']}  rejected {counters['rejected_bars']}")
     out.line(f"predictions       {counters['predictions']}")
     out.line(f"signals           {counters['signals_generated']}  outcomes {counters['signal_outcomes']}")
     out.line(f"no-trade reasons  {counters['no_trade']}")
     out.line(f"risk rejections   {counters['risk_rejections']}")
-    out.line(f"orders sent       {report.broker_submissions}  fills {counters['fills']}  trades {perf.trades}")
+    out.line(
+        f"orders sent       {report.broker_submissions}  fills {counters['fills']}  trades {perf.trades}"
+    )
     out.line(f"net pnl           {perf.net_pnl:.2f}  (gross {perf.gross_pnl:.2f}, fees {perf.fees:.2f})")
-    out.line(f"model vs exec     model pnl {perf.model_pnl:.2f}, execution shortfall {perf.execution_shortfall:.2f}")
+    out.line(
+        f"model vs exec     model pnl {perf.model_pnl:.2f}, execution shortfall {perf.execution_shortfall:.2f}"
+    )
     out.line(f"win rate          {_fmt(perf.win_rate)}  profit factor {_fmt(perf.profit_factor)}")
-    out.line(f"max drawdown      {_fmt(perf.max_drawdown)}  sharpe {_fmt(perf.sharpe, '{:.2f}')} (few days: not meaningful)")
+    out.line(
+        f"max drawdown      {_fmt(perf.max_drawdown)}  sharpe {_fmt(perf.sharpe, '{:.2f}')} (few days: not meaningful)"
+    )
     out.line(f"open positions    {report.summary['open_positions'] or 'none'}")
     if kill.get("engaged"):
         out.line(f"KILL SWITCH       ENGAGED: {kill['reason']} - {kill['detail']}")
@@ -302,7 +310,9 @@ async def cmd_kill_switch(args: argparse.Namespace, out: Console) -> int:
 async def cmd_run(args: argparse.Namespace, out: Console) -> int:
     config = _config(args)
     enforce_mode_gate(config.trading.mode, config.broker.mode)
-    out.line("Paper trading against a real broker arrives in phase 4 (AlpacaBrokerAdapter, Alpaca Paper only).")
+    out.line(
+        "Paper trading against a real broker arrives in phase 4 (AlpacaBrokerAdapter, Alpaca Paper only)."
+    )
     out.line("Nothing was started. Use `simulate` to run the full pipeline on the synthetic market.")
     return EXIT_REFUSED
 

@@ -58,7 +58,11 @@ SYSTEM_ACTOR = "system"
 
 class KillSwitch:
     def __init__(
-        self, clock: Clock, *, state: KillSwitchState | None = None, on_change: KillSwitchListener | None = None
+        self,
+        clock: Clock,
+        *,
+        state: KillSwitchState | None = None,
+        on_change: KillSwitchListener | None = None,
     ) -> None:
         self._clock = clock
         self._state = state or KillSwitchState()
@@ -96,13 +100,18 @@ class KillSwitch:
         self._state = KillSwitchState()
         if self._on_change is not None and previous.engaged:
             await self._on_change(
-                KillSwitchState(engaged=False, detail=f"reset by {by}: {note}", engaged_by=by), "KILL_SWITCH_RESET"
+                KillSwitchState(engaged=False, detail=f"reset by {by}: {note}", engaged_by=by),
+                "KILL_SWITCH_RESET",
             )
 
 
 class TradingControls:
     def __init__(
-        self, clock: Clock, *, state: TradingControlState | None = None, on_change: ControlListener | None = None
+        self,
+        clock: Clock,
+        *,
+        state: TradingControlState | None = None,
+        on_change: ControlListener | None = None,
     ) -> None:
         self._clock = clock
         self._state = state or TradingControlState()
@@ -126,6 +135,8 @@ class TradingControls:
         await self._set(False, by, note)
 
     async def _set(self, paused: bool, by: str, note: str) -> None:
-        self._state = TradingControlState(paused=paused, changed_at=self._clock.now(), changed_by=by, note=note)
+        self._state = TradingControlState(
+            paused=paused, changed_at=self._clock.now(), changed_by=by, note=note
+        )
         if self._on_change is not None:
             await self._on_change(self._state)

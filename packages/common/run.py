@@ -59,7 +59,12 @@ def detect_git_commit(root: Path = PROJECT_ROOT) -> str | None:
     """Short commit hash, suffixed with '-dirty' when the working tree has uncommitted changes."""
     try:
         head = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5, check=False
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         if head.returncode != 0 or not head.stdout.strip():
             return None

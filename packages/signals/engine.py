@@ -81,7 +81,9 @@ class SignalEngine:
         )
         spread_bps = quote.spread_bps if quote is not None else None
         signal = Signal(
-            signal_id=make_signal_id(self._namespace, self._strategy, prediction.symbol, prediction.timestamp),
+            signal_id=make_signal_id(
+                self._namespace, self._strategy, prediction.symbol, prediction.timestamp
+            ),
             prediction_id=prediction.prediction_id,
             symbol=prediction.symbol,
             timestamp=prediction.timestamp,

@@ -135,17 +135,27 @@ class DecisionVerifier:
             return result
         config: dict[str, Any] = run["config"]
         trading = TradingSection.model_validate(config["trading"])
-        calendar = RegularHoursCalendar(trading.exchange_timezone, trading.session_open, trading.session_close)
+        calendar = RegularHoursCalendar(
+            trading.exchange_timezone, trading.session_open, trading.session_close
+        )
         namespace = run["namespace"]
 
         # 1. features
         spec = FeatureSpec.from_config(FeaturesSection.model_validate(config["features"]))
-        result.check("spec_hash", spec.spec_hash() == stored_features["spec_hash"], stored_features["spec_hash"])
+        result.check(
+            "spec_hash", spec.spec_hash() == stored_features["spec_hash"], stored_features["spec_hash"]
+        )
         bars = [
-            bar_from_row(row) for row in trace["bars"] if row.get("quality_status") != DataQualityStatus.INVALID.value
+            bar_from_row(row)
+            for row in trace["bars"]
+            if row.get("quality_status") != DataQualityStatus.INVALID.value
         ]
         result.details["bars"] = len(bars)
-        result.check("window_size", len(bars) == stored_features["n_bars"], f"{len(bars)} != {stored_features['n_bars']}")
+        result.check(
+            "window_size",
+            len(bars) == stored_features["n_bars"],
+            f"{len(bars)} != {stored_features['n_bars']}",
+        )
         if not bars:
             return result
         quote = MarketQuote.model_validate(stored_features["quote"]) if stored_features["quote"] else None
@@ -162,7 +172,11 @@ class DecisionVerifier:
 
         # 2. prediction (model rebuilt from its registered parameters)
         params = await self._repo.model_params(prediction["model_name"], prediction["model_version"])
-        result.check("model_registered", params is not None, f"{prediction['model_name']}@{prediction['model_version']}")
+        result.check(
+            "model_registered",
+            params is not None,
+            f"{prediction['model_name']}@{prediction['model_version']}",
+        )
         if params is None:
             return result
         model = build_model(
@@ -173,8 +187,12 @@ class DecisionVerifier:
             bar_minutes=features.timeframe.minutes,
         )
         replayed = model.predict(features)
-        result.check("prediction_id", replayed.prediction_id == prediction["prediction_id"], replayed.prediction_id)
-        result.check("direction", replayed.direction.value == prediction["direction"], replayed.direction.value)
+        result.check(
+            "prediction_id", replayed.prediction_id == prediction["prediction_id"], replayed.prediction_id
+        )
+        result.check(
+            "direction", replayed.direction.value == prediction["direction"], replayed.direction.value
+        )
         for name in PREDICTION_FIELDS:
             value = getattr(replayed, name)
             result.check("prediction_values", same_number(prediction[name], value), f"{name}={value}")
@@ -212,7 +230,9 @@ class DecisionVerifier:
                 f"replayed REJECTED {expected}, stored {signal['status']} {signal['rejection_reasons']}",
             )
         else:
-            result.check("signal_verdict", not stored_stage, f"replayed ELIGIBLE, stored {signal['rejection_reasons']}")
+            result.check(
+                "signal_verdict", not stored_stage, f"replayed ELIGIBLE, stored {signal['rejection_reasons']}"
+            )
         result.details.update(
             {
                 "symbol": signal["symbol"],

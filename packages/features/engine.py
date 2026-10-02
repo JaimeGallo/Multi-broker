@@ -150,7 +150,9 @@ class FeatureEngine:
         used_quote = quote if self._spec.include_microstructure else None
         values = compute_features(window, self._spec, used_quote, self._day_start)
         return FeatureVector(
-            feature_id=make_feature_id(self._namespace, last.symbol, last.end, self._spec.version, self._hash),
+            feature_id=make_feature_id(
+                self._namespace, last.symbol, last.end, self._spec.version, self._hash
+            ),
             symbol=last.symbol,
             timestamp=last.end,
             timeframe=last.timeframe,

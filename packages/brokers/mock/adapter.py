@@ -238,8 +238,12 @@ class MockBrokerAdapter(BrokerAdapter):
         if request.order_class is OrderClass.BRACKET:
             exit_side = request.side.opposite
             legs = [
-                self._new_leg(parent, exit_side, OrderIntent.TAKE_PROFIT, OrderType.LIMIT, request.take_profit_price),
-                self._new_leg(parent, exit_side, OrderIntent.STOP_LOSS, OrderType.STOP, request.stop_loss_price),
+                self._new_leg(
+                    parent, exit_side, OrderIntent.TAKE_PROFIT, OrderType.LIMIT, request.take_profit_price
+                ),
+                self._new_leg(
+                    parent, exit_side, OrderIntent.STOP_LOSS, OrderType.STOP, request.stop_loss_price
+                ),
             ]
             parent.leg_client_order_ids = [leg.client_order_id for leg in legs]
         self._emit(parent, OrderEventType.ACKNOWLEDGED, at=now)
@@ -326,9 +330,9 @@ class MockBrokerAdapter(BrokerAdapter):
             if request.quantity > available + EPSILON:
                 raise OrderRejected(f"insufficient qty available ({available:g})", cid)
             return
-        if request.side is Side.SELL and self._cfg.shortable_symbols is not None:
-            if request.symbol not in self._cfg.shortable_symbols:
-                raise OrderRejected("symbol not shortable", cid)
+        shortable = self._cfg.shortable_symbols
+        if request.side is Side.SELL and shortable is not None and request.symbol not in shortable:
+            raise OrderRejected("symbol not shortable", cid)
         if request.quantity * price > self._buying_power() + EPSILON:
             raise OrderRejected("insufficient buying power", cid)
 
@@ -506,7 +510,9 @@ class MockBrokerAdapter(BrokerAdapter):
         for leg in ordered:
             if leg.intent is OrderIntent.TAKE_PROFIT and conservative and activated_this_bar:
                 continue
-            fill = self._limit_fill(leg, bar) if leg.order_type is OrderType.LIMIT else self._stop_fill(leg, bar)
+            fill = (
+                self._limit_fill(leg, bar) if leg.order_type is OrderType.LIMIT else self._stop_fill(leg, bar)
+            )
             if fill is not None:
                 self._fill(leg, leg.remaining_quantity, fill[0], fill[1])
                 return
@@ -562,10 +568,16 @@ class MockBrokerAdapter(BrokerAdapter):
         self._cash -= order.side.sign * quantity * price + fee
         previous = order.filled_quantity
         order.filled_quantity = previous + quantity
-        order.average_fill_price = ((order.average_fill_price or 0.0) * previous + price * quantity) / order.filled_quantity
-        order.status = OrderStatus.FILLED if order.remaining_quantity <= EPSILON else OrderStatus.PARTIALLY_FILLED
+        order.average_fill_price = (
+            (order.average_fill_price or 0.0) * previous + price * quantity
+        ) / order.filled_quantity
+        order.status = (
+            OrderStatus.FILLED if order.remaining_quantity <= EPSILON else OrderStatus.PARTIALLY_FILLED
+        )
         order.updated_at = at
-        event_type = OrderEventType.FILL if order.status is OrderStatus.FILLED else OrderEventType.PARTIAL_FILL
+        event_type = (
+            OrderEventType.FILL if order.status is OrderStatus.FILLED else OrderEventType.PARTIAL_FILL
+        )
         self._emit(order, event_type, at=at, fill_quantity=quantity, fill_price=price, fee=fee)
         if order.status is not OrderStatus.FILLED:
             return

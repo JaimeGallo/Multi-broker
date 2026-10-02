@@ -49,7 +49,15 @@ from packages.common.enums import (
     SignalStatus,
 )
 from packages.common.errors import BrokerError, ModelError
-from packages.common.events import BarRecord, BrokerEvent, EventBus, PredictionRecord, RiskEvent, SystemEvent, Topics
+from packages.common.events import (
+    BarRecord,
+    BrokerEvent,
+    EventBus,
+    PredictionRecord,
+    RiskEvent,
+    SystemEvent,
+    Topics,
+)
 from packages.common.ids import make_client_order_id
 from packages.common.run import RunContext
 from packages.common.safety import assert_paper_account
@@ -234,7 +242,11 @@ class TradingEngine:
             "engine",
             "engine.started",
             f"engine started in {self._run.mode.value} mode",
-            {"run_id": self._run.run_id, "namespace": self._run.namespace, "kill_switch": self._kill_switch.engaged},
+            {
+                "run_id": self._run.run_id,
+                "namespace": self._run.namespace,
+                "kill_switch": self._kill_switch.engaged,
+            },
         )
         return report
 
@@ -244,7 +256,9 @@ class TradingEngine:
         await self._flush_quietly()
 
     async def stop(self) -> None:
-        await self._system_event("INFO", "engine", "engine.stopped", "engine stopped", self.counters.as_dict())
+        await self._system_event(
+            "INFO", "engine", "engine.stopped", "engine stopped", self.counters.as_dict()
+        )
         await self._flush_quietly()
         for adapter in self._router.adapters.values():
             await adapter.disconnect()
@@ -320,7 +334,13 @@ class TradingEngine:
         if not ingest.accepted:
             self._market_engine.record_rejected(bar, ingest, now)
             self.counters.rejected_bars += 1
-            kind = "conflicting_duplicate" if ingest.conflicting else "duplicate" if ingest.duplicate else "out_of_order"
+            kind = (
+                "conflicting_duplicate"
+                if ingest.conflicting
+                else "duplicate"
+                if ingest.duplicate
+                else "out_of_order"
+            )
             self.counters.quality[kind] += 1
             if kind != "duplicate":
                 await self._system_event(
@@ -337,7 +357,11 @@ class TradingEngine:
         if report.status is DataQualityStatus.INVALID:
             self.counters.no_trade[NoTradeReason.DATA_INVALID.value] += 1
             await self._system_event(
-                "WARNING", "data_quality", "bar.invalid", f"{bar.symbol} {bar.start.isoformat()}", {"issues": report.codes}
+                "WARNING",
+                "data_quality",
+                "bar.invalid",
+                f"{bar.symbol} {bar.start.isoformat()}",
+                {"issues": report.codes},
             )
             return  # never committed: an invalid bar cannot contaminate the feature window
         self._market_engine.commit_bar(bar, ingest, now)
@@ -356,9 +380,13 @@ class TradingEngine:
     async def _decide(self, bar: MarketBar, report: DataQualityReport, quote: MarketQuote | None) -> None:
         cfg = self._config
         status = report.status
-        if status is DataQualityStatus.STALE or (status is DataQualityStatus.DEGRADED and cfg.data_quality.block_on_degraded):
+        if status is DataQualityStatus.STALE or (
+            status is DataQualityStatus.DEGRADED and cfg.data_quality.block_on_degraded
+        ):
             self._pipeline.observe(bar)
-            reason = NoTradeReason.DATA_STALE if status is DataQualityStatus.STALE else NoTradeReason.DATA_DEGRADED
+            reason = (
+                NoTradeReason.DATA_STALE if status is DataQualityStatus.STALE else NoTradeReason.DATA_DEGRADED
+            )
             self.counters.no_trade[reason.value] += 1
             return
         started = perf_counter()
@@ -420,7 +448,9 @@ class TradingEngine:
             instrument = await broker.get_instrument(signal.symbol)
         except BrokerError as exc:
             self.counters.no_trade[NoTradeReason.BROKER_UNAVAILABLE.value] += 1
-            await self._set_signal_status(signal, SignalStatus.REJECTED, NoTradeReason.BROKER_UNAVAILABLE.value)
+            await self._set_signal_status(
+                signal, SignalStatus.REJECTED, NoTradeReason.BROKER_UNAVAILABLE.value
+            )
             await self._system_event("WARNING", "broker", "broker.unavailable", str(exc), {})
             return
         self._portfolio.update_account(account)
@@ -515,7 +545,9 @@ class TradingEngine:
         if order.status is OrderStatus.REJECTED:
             self.counters.orders_rejected += 1
             self.counters.no_trade[NoTradeReason.ORDER_REJECTED.value] += 1
-            await self._set_signal_status(signal, SignalStatus.REJECTED, f"order_rejected:{order.reject_reason}")
+            await self._set_signal_status(
+                signal, SignalStatus.REJECTED, f"order_rejected:{order.reject_reason}"
+            )
         else:
             await self._set_signal_status(signal, SignalStatus.EXPIRED, "entry_not_filled")
 
@@ -523,7 +555,9 @@ class TradingEngine:
         self.counters.fills += 1
         self._portfolio.apply_fill(fill)
         self._positions.on_fill(fill)
-        exit_reference = self._positions.exit_reference(fill.signal_id, fill.intent) if fill.signal_id else None
+        exit_reference = (
+            self._positions.exit_reference(fill.signal_id, fill.intent) if fill.signal_id else None
+        )
         trade = self._ledger.on_fill(fill, exit_reference)
         await self._bus.publish(Topics.FILL, fill)
         if fill.intent is OrderIntent.ENTRY and fill.signal_id:
@@ -544,7 +578,9 @@ class TradingEngine:
         if len(self._entry_slippage) >= cfg.min_fills_for_slippage:
             average = sum(self._entry_slippage) / len(self._entry_slippage)
             if average > cfg.max_avg_slippage_bps:
-                await self._engage(KillSwitchReason.ABNORMAL_SLIPPAGE, f"average entry slippage {average:.1f} bps")
+                await self._engage(
+                    KillSwitchReason.ABNORMAL_SLIPPAGE, f"average entry slippage {average:.1f} bps"
+                )
 
     # ------------------------------------------------------------------ timers
 
@@ -564,7 +600,9 @@ class TradingEngine:
         since = self._health.failing_since("broker_connected")
         limit = self._config.kill_switch.broker_disconnect_seconds
         if since is not None and (now - since).total_seconds() >= limit:
-            await self._engage(KillSwitchReason.BROKER_DISCONNECTED, f"broker disconnected since {since.isoformat()}")
+            await self._engage(
+                KillSwitchReason.BROKER_DISCONNECTED, f"broker disconnected since {since.isoformat()}"
+            )
         database = self._health.last.get("database_available")
         if database is not None and database.state is HealthState.FAIL:
             await self._engage(KillSwitchReason.DATABASE_UNAVAILABLE, database.detail)
@@ -586,7 +624,9 @@ class TradingEngine:
         if self._config.kill_switch.cancel_entries_on_kill:
             cancelled = await self._positions.cancel_pending_entries()
             if cancelled:
-                await self._system_event("WARNING", "risk", "kill_switch.entries_cancelled", f"{cancelled} entries", {})
+                await self._system_event(
+                    "WARNING", "risk", "kill_switch.entries_cancelled", f"{cancelled} entries", {}
+                )
 
     async def _snapshot(self, now: datetime, *, force: bool = False) -> None:
         every = timedelta(minutes=self._config.persistence.snapshot_every_minutes)
@@ -607,7 +647,9 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ signals, kill switch, events
 
-    async def _set_signal_status(self, signal: Signal, status: SignalStatus, reason: str | None = None) -> None:
+    async def _set_signal_status(
+        self, signal: Signal, status: SignalStatus, reason: str | None = None
+    ) -> None:
         if status not in SIGNAL_TRANSITIONS[signal.status]:
             return
         signal.transition(status, self._clock.now(), reason)
@@ -669,7 +711,11 @@ class TradingEngine:
 
     async def _on_exit_failure(self, position: ManagedPosition, reason: str) -> None:
         await self._system_event(
-            "ERROR", "execution", "exit.failed", reason, {"signal_id": position.signal_id, "symbol": position.symbol}
+            "ERROR",
+            "execution",
+            "exit.failed",
+            reason,
+            {"signal_id": position.signal_id, "symbol": position.symbol},
         )
         await self._engage(KillSwitchReason.UNEXPECTED_POSITION, f"cannot close {position.symbol}: {reason}")
 

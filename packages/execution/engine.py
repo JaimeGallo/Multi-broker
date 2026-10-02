@@ -99,7 +99,9 @@ class BrokerExecutionEngine(ExecutionEngine):
             bracket=request.order_class is OrderClass.BRACKET,
             short=request.intent is OrderIntent.ENTRY and request.side is Side.SELL,
         )
-        broker = await self._router.select_broker(request.symbol, request.asset_class, self._strategy, requirements)
+        broker = await self._router.select_broker(
+            request.symbol, request.asset_class, self._strategy, requirements
+        )
         now = self._clock.now()
         local = Order.from_request(request, broker=broker.name, at=now)
         await self._save(local)  # write-ahead: durable before any broker call
@@ -120,7 +122,9 @@ class BrokerExecutionEngine(ExecutionEngine):
                 remote = await self._lookup(broker, request.client_order_id)
                 if remote is None:
                     await self._anomaly("duplicate_without_order", request.client_order_id, {})
-                    return await self._mark(local, OrderStatus.ERROR, "duplicate_client_order_id_without_order")
+                    return await self._mark(
+                        local, OrderStatus.ERROR, "duplicate_client_order_id_without_order"
+                    )
                 break
             except AmbiguousSubmission as exc:
                 ambiguous = True
@@ -137,7 +141,9 @@ class BrokerExecutionEngine(ExecutionEngine):
                 return await self._mark(local, OrderStatus.REJECTED, f"broker_unavailable: {exc}")
         if remote is None:
             await self._anomaly(
-                "submission_outcome_unknown", request.client_order_id, {"attempts": self._cfg.max_submit_attempts}
+                "submission_outcome_unknown",
+                request.client_order_id,
+                {"attempts": self._cfg.max_submit_attempts},
             )
             return await self._mark(local, OrderStatus.ERROR, "submission_outcome_unknown")
 
@@ -166,7 +172,10 @@ class BrokerExecutionEngine(ExecutionEngine):
         except OrderNotFound:
             await self.reconcile_order(client_order_id)
         except BrokerError as exc:
-            log.warning("cancel failed; it will be retried", extra={"client_order_id": client_order_id, "error": str(exc)})
+            log.warning(
+                "cancel failed; it will be retried",
+                extra={"client_order_id": client_order_id, "error": str(exc)},
+            )
 
     async def replace(self, client_order_id: str, changes: OrderReplace) -> Order:
         order = await self._store.get(client_order_id)

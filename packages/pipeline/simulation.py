@@ -23,7 +23,7 @@ from datetime import datetime
 
 from packages.brokers.mock import MockBrokerAdapter
 from packages.common.clock import SimulatedClock
-from packages.common.entities import MarketBar, MarketEvent, MarketQuote
+from packages.common.entities import MarketBar, MarketEvent, MarketQuote, event_time
 from packages.common.enums import Timeframe
 from packages.market_data.base import MarketDataAdapter
 from packages.pipeline.engine import TradingEngine
@@ -39,13 +39,6 @@ class SimulationResult:
     last_timestamp: datetime | None = None
     completed: bool = False
     interrupted: bool = False
-
-
-def event_time(event: MarketEvent) -> datetime:
-    """When an event becomes known: a bar at the end of its interval, quotes and trades at their timestamp."""
-    if isinstance(event, MarketBar):
-        return event.end
-    return event.timestamp
 
 
 class SimulationRunner:

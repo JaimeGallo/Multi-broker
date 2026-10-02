@@ -74,7 +74,8 @@ def summarize_outcomes(outcomes: Sequence[PredictionOutcome]) -> dict[str, float
     directional = [o for o in outcomes if o.direction_correct is not None]
     hits = sum(1 for o in directional if o.direction_correct)
     brier = (
-        sum((o.probability_up - (1.0 if o.realized_return > 0 else 0.0)) ** 2 for o in outcomes) / len(outcomes)
+        sum((o.probability_up - (1.0 if o.realized_return > 0 else 0.0)) ** 2 for o in outcomes)
+        / len(outcomes)
         if outcomes
         else None
     )
