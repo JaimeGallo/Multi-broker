@@ -176,7 +176,7 @@ def print_report(out: Console, report: SimulationReport, config: AppConfig) -> N
     kill = report.summary["kill_switch"]
     out.line(f"run_id            {report.run_id}")
     out.line(f"status            {report.status}")
-    out.line(f"model             {config.model.name}@{config.model.version} (stand-in, no validated edge)")
+    out.line(f"model             {config.model.name}@{config.model.version} (no validated edge)")
     out.line(f"database          {redact_url(config.persistence.database_url)}")
     out.line(
         f"market events     {report.result.events}  ({report.result.first_timestamp} -> {report.result.last_timestamp})"
