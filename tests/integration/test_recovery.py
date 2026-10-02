@@ -216,7 +216,7 @@ async def test_database_failure_blocks_orders_and_engages_the_kill_switch(tmp_pa
     config = sim_config(SYMBOLS)
     ctx = await build_simulation(config, options(db, run_id="run_dbfail"))
 
-    async def broken(rows: Any) -> None:
+    async def broken(rows: Any, **kwargs: Any) -> None:
         if rows:
             raise RuntimeError("disk full")
 

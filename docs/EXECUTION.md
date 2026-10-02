@@ -166,7 +166,7 @@ El `MockBrokerAdapter` aplica las reglas de `BROKER_ARCHITECTURE.md` §5 y el `C
 | Spread | quote real o `default_spread_bps` | medio spread por lado |
 | Slippage | `slippage_bps` por lado | adverso |
 | Comisión | `commission_per_share`, `commission_bps`, `min_commission` | 0 por defecto: **verificar tarifas del broker** |
-| Tasas regulatorias en ventas | `sec_fee_rate`, `taf_per_share`, `taf_max_per_trade` | 0 por defecto: **fijar con las tarifas vigentes** |
+| Tasas regulatorias en ventas | `sec_fee_rate`, `taf_per_share`, `taf_max_per_trade` | SEC Sección 31: USD 20,60 por millón (desde 04/04/2026); FINRA TAF: USD 0,000195/acción, máx. USD 9,79 (pausada del 01/10 al 31/12/2026; se mantiene como coste conservador). Verificado el 02/10/2026 |
 | Latencia | `latency_ms`, `latency_cost_factor` | coste ≈ volatilidad × √latencia |
 
 Los informes siempre separan PnL bruto, comisiones/tasas, slippage y PnL neto.

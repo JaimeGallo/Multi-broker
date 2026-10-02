@@ -75,6 +75,10 @@ class MockBrokerAdapter(BrokerAdapter):
         self._positions: dict[str, PositionState] = {}
         self._orders: dict[str, Order] = {}
         self._sequence: list[str] = []
+        self._position_in_sequence: dict[str, int] = {}
+        self._open: dict[
+            str, None
+        ] = {}  # non-terminal order ids, in submission order (long backtests stay O(open))
         self._active_legs: dict[str, datetime] = {}
         self._last_bar: dict[str, MarketBar] = {}
         self._last_price: dict[str, float] = {}
@@ -198,11 +202,12 @@ class MockBrokerAdapter(BrokerAdapter):
 
     async def get_orders(self, status: OrderQueryStatus = OrderQueryStatus.OPEN) -> list[Order]:
         self._require_connected()
-        orders = [self._orders[cid] for cid in self._sequence]
         if status is OrderQueryStatus.OPEN:
-            orders = [o for o in orders if not o.is_terminal]
-        elif status is OrderQueryStatus.CLOSED:
-            orders = [o for o in orders if o.is_terminal]
+            orders = [self._orders[cid] for cid in self._open]
+        else:
+            orders = [self._orders[cid] for cid in self._sequence]
+            if status is OrderQueryStatus.CLOSED:
+                orders = [o for o in orders if o.is_terminal]
         return [self._view(o) for o in orders]
 
     async def get_order(self, client_order_id: str) -> Order | None:
@@ -339,7 +344,7 @@ class MockBrokerAdapter(BrokerAdapter):
     def _held_quantity(self, symbol: str, side: Side) -> float:
         """Quantity already committed by working orders on the same side (an OCO pair counts once)."""
         held_by_group: dict[str, float] = {}
-        for cid in self._sequence:
+        for cid in self._open:
             order = self._orders[cid]
             if order.symbol != symbol or order.side is not side or order.is_terminal:
                 continue
@@ -377,7 +382,10 @@ class MockBrokerAdapter(BrokerAdapter):
 
     def _store(self, order: Order) -> None:
         self._orders[order.client_order_id] = order
+        self._position_in_sequence[order.client_order_id] = len(self._sequence)
         self._sequence.append(order.client_order_id)
+        if not order.is_terminal:
+            self._open[order.client_order_id] = None
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -423,6 +431,7 @@ class MockBrokerAdapter(BrokerAdapter):
         if status is OrderStatus.REJECTED:
             order.reject_reason = reason
         self._active_legs.pop(order.client_order_id, None)
+        self._open.pop(order.client_order_id, None)
         event_type = {
             OrderStatus.CANCELLED: OrderEventType.CANCELLED,
             OrderStatus.EXPIRED: OrderEventType.EXPIRED,
@@ -443,7 +452,7 @@ class MockBrokerAdapter(BrokerAdapter):
     def _buying_power(self) -> float:
         gross = sum(abs(p.quantity) * self._mark(s) for s, p in self._positions.items())
         reserved = 0.0
-        for cid in self._sequence:
+        for cid in self._open:
             order = self._orders[cid]
             if order.intent is OrderIntent.ENTRY and not order.is_terminal:
                 reserved += order.remaining_quantity * self._last_price.get(order.symbol, 0.0)
@@ -458,7 +467,7 @@ class MockBrokerAdapter(BrokerAdapter):
             return
         if day == self._session_day:
             return
-        for cid in list(self._sequence):
+        for cid in list(self._open):
             order = self._orders[cid]
             if not order.is_terminal and order.time_in_force is TimeInForce.DAY:
                 self._finish(order, OrderStatus.EXPIRED, bar.start, reason="day_order_expired")
@@ -466,14 +475,19 @@ class MockBrokerAdapter(BrokerAdapter):
         self._session_day = day
 
     def _process_orders(self, bar: MarketBar) -> None:
-        for cid in list(self._sequence):
+        for cid in list(self._open):
             order = self._orders[cid]
             if order.symbol != bar.symbol or order.is_terminal or order.parent_client_order_id is not None:
                 continue
             if order.submitted_at is None or order.submitted_at > bar.start:
                 continue  # submitted during/after this bar: it can only trade on later bars
             self._try_fill(order, bar)
-        for cid in list(self._sequence):
+        parents = {
+            parent_id
+            for leg_id in self._active_legs
+            if (parent_id := self._orders[leg_id].parent_client_order_id) is not None
+        }
+        for cid in sorted(parents, key=self._position_in_sequence.__getitem__):  # submission order, as before
             parent = self._orders[cid]
             if parent.symbol != bar.symbol or not parent.leg_client_order_ids:
                 continue
@@ -575,6 +589,9 @@ class MockBrokerAdapter(BrokerAdapter):
             OrderStatus.FILLED if order.remaining_quantity <= EPSILON else OrderStatus.PARTIALLY_FILLED
         )
         order.updated_at = at
+        if order.status is OrderStatus.FILLED:
+            self._open.pop(order.client_order_id, None)
+            self._active_legs.pop(order.client_order_id, None)
         event_type = (
             OrderEventType.FILL if order.status is OrderStatus.FILLED else OrderEventType.PARTIAL_FILL
         )

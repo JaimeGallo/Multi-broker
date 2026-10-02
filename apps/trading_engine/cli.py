@@ -1,7 +1,7 @@
 """Command line interface: `python -m apps.trading_engine <command>`.
 
-Commands: simulate, trace, verify, kill-switch, run, jev-check. Console output is plain ASCII; logs go to stderr.
-Exit codes: 0 ok, 1 verification failed / not found, 2 refused or not available, 3 configuration error.
+Commands: simulate, trace, verify, kill-switch, run, jev-check, data, experiment, experiments. Console output is plain ASCII; logs go to stderr.
+Exit codes: 0 ok, 1 verification failed / not found, 2 refused or not available, 3 configuration or data error.
 """
 
 from __future__ import annotations
@@ -23,18 +23,23 @@ from apps.trading_engine.bootstrap import (
     SimulationOptions,
     SimulationReport,
     build_calendar,
+    load_dataset,
     run_simulation,
 )
+from apps.trading_engine.experiment import JobResult, run_experiment
 from packages.common.clock import SystemClock
 from packages.common.config import AppConfig, load_config
 from packages.common.enums import TradingMode
-from packages.common.errors import ConfigError, LiveTradingNotAllowed, SafetyError
+from packages.common.errors import ConfigError, DataError, LiveTradingNotAllowed, SafetyError
 from packages.common.logging import configure_logging
 from packages.common.safety import enforce_mode_gate, mode_banner
 from packages.common.secrets import load_dotenv, redact_url, sensitive_values
 from packages.features.engine import FeatureEngine
 from packages.features.spec import FeatureSpec
+from packages.jev.registry import available_models
 from packages.jev.typesafe import SdkJevClient, TypeSafeJEVModel
+from packages.market_data.alpaca_history import AlpacaHistoricalClient, credentials
+from packages.market_data.dataset import DatasetStore
 from packages.market_data.synthetic import SyntheticMarket
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository
@@ -73,11 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default=None, help="log level (default: logging.level from config)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sim = sub.add_parser("simulate", help="run the full pipeline on the synthetic market (backtest mode)")
-    sim.add_argument("--start", type=date.fromisoformat, required=True, help="first day (YYYY-MM-DD)")
-    sim.add_argument("--end", type=date.fromisoformat, help="last day (default: --start)")
+    sim = sub.add_parser(
+        "simulate", help="run the full pipeline (backtest) on the synthetic market or a dataset"
+    )
+    sim.add_argument("--dataset", help="replay a downloaded dataset instead of the synthetic market")
+    sim.add_argument(
+        "--start", type=date.fromisoformat, help="first day (YYYY-MM-DD; default: dataset start)"
+    )
+    sim.add_argument("--end", type=date.fromisoformat, help="last day (default: --start, or dataset end)")
     sim.add_argument("--symbols", help="comma separated symbols (default: trading.symbols)")
-    sim.add_argument("--model", help="model name (jev-heuristic, baseline-random, baseline-flat)")
+    sim.add_argument("--model", help=f"model name ({', '.join(available_models())})")
     sim.add_argument("--run-id", help="explicit run id")
     sim.add_argument("--max-events", type=int, help="stop after N market events (simulated crash)")
     sim.add_argument("--pace", type=float, default=0.0, help="seconds to sleep between bars (visual runs)")
@@ -102,6 +112,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("run", help="paper trading against a real broker (phase 4)")
 
+    data = sub.add_parser("data", help="download and inspect historical datasets (Alpaca)")
+    data_sub = data.add_subparsers(dest="data_command", required=True)
+    download = data_sub.add_parser("download", help="download 1Min bars into a versioned local dataset")
+    download.add_argument("--name", required=True, help="dataset name, e.g. sip-2024")
+    download.add_argument("--symbols", help="comma separated symbols (default: trading.symbols)")
+    download.add_argument("--start", type=date.fromisoformat, required=True)
+    download.add_argument("--end", type=date.fromisoformat, required=True)
+    data_sub.add_parser("list", help="list local datasets")
+    info = data_sub.add_parser("info", help="show a dataset manifest summary")
+    info.add_argument("name")
+    info.add_argument("--verify", action="store_true", help="recompute file hashes")
+
+    exp = sub.add_parser("experiment", help="compare models on a dataset, fold by fold (phase 3)")
+    exp.add_argument("--dataset", required=True)
+    exp.add_argument(
+        "--models", required=True, help=f"comma separated, from: {', '.join(available_models())}"
+    )
+    exp.add_argument("--reference", help="model the others are compared with (default: the first)")
+    exp.add_argument(
+        "--workers", type=int, default=1, help="parallel processes (one backtest per model and fold)"
+    )
+    exp.add_argument("--start", type=date.fromisoformat)
+    exp.add_argument("--end", type=date.fromisoformat)
+    exp.add_argument("--symbols", help="comma separated subset of the dataset symbols")
+    exp.add_argument("--json", action="store_true")
+    sub.add_parser("experiments", help="list recorded experiments")
+
     sub.add_parser(
         "jev-check", help="test the TypeSafe Jev setup with one live call (use with the typesafe-jev profile)"
     )
@@ -125,16 +162,34 @@ def _database_url(config: AppConfig) -> str:
     return url
 
 
+def _symbols(raw: str | None) -> list[str] | None:
+    return [x.strip().upper() for x in raw.split(",") if x.strip()] if raw else None
+
+
+def _dataset_overrides(name: str | None) -> dict[str, Any]:
+    return {"market_data": {"provider": "historical", "historical": {"dataset": name}}} if name else {}
+
+
 async def cmd_simulate(args: argparse.Namespace, out: Console) -> int:
-    overrides: dict[str, Any] = {"trading": {"mode": TradingMode.BACKTEST.value}}
-    if args.symbols:
-        overrides["trading"]["symbols"] = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    overrides: dict[str, Any] = {
+        "trading": {"mode": TradingMode.BACKTEST.value},
+        **_dataset_overrides(args.dataset),
+    }
+    if symbols := _symbols(args.symbols):
+        overrides["trading"]["symbols"] = symbols
     if args.model:
         overrides["model"] = {"name": args.model}
     config = _config(args, overrides)
+    dataset = load_dataset(config)
+    if dataset is None and args.start is None:
+        out.line("simulate: --start is required on the synthetic market")
+        return EXIT_REFUSED
+    start = args.start or (dataset.start if dataset else None)
+    end = args.end or (args.start if args.start else dataset.end if dataset else None)
+    assert start is not None and end is not None
     options = SimulationOptions(
-        start=args.start,
-        end=args.end or args.start,
+        start=start,
+        end=end,
         run_id=args.run_id,
         database_url=_database_url(config),
         max_events=args.max_events,
@@ -198,6 +253,10 @@ def print_report(out: Console, report: SimulationReport, config: AppConfig) -> N
         f"max drawdown      {_fmt(perf.max_drawdown)}  sharpe {_fmt(perf.sharpe, '{:.2f}')} (few days: not meaningful)"
     )
     out.line(f"open positions    {report.summary['open_positions'] or 'none'}")
+    if "dataset" in report.extra:
+        out.line(
+            f"dataset           {report.extra['dataset']['name']} (version {report.extra['dataset']['version']})"
+        )
     usage = report.extra.get("jev_usage")
     if usage:
         out.line(
@@ -388,6 +447,174 @@ async def cmd_jev_check(args: argparse.Namespace, out: Console) -> int:
     return EXIT_OK
 
 
+async def cmd_data(args: argparse.Namespace, out: Console) -> int:
+    config = _config(args)
+    store = DatasetStore(config.market_data.historical.root)
+    if args.data_command == "list":
+        names = store.names()
+        for name in names:
+            ds = store.load(name)
+            out.line(f"{name:<24} {ds.start}..{ds.end}  {len(ds.symbols)} symbols  {ds.source}")
+        if not names:
+            out.line(f"no datasets in {store.root}")
+        return EXIT_OK
+    if args.data_command == "info":
+        ds = store.load(args.name)
+        m = ds.manifest
+        out.line(f"name        {ds.name}")
+        out.line(f"version     {ds.version}  ({ds.source})")
+        out.line(f"range       {ds.start}..{ds.end}  sessions {len(m['calendar'])}")
+        out.line(f"symbols     {', '.join(ds.symbols)}")
+        out.line(
+            f"bars        {sum(f['bars'] for f in m['files'].values())}  (dropped outside session: {m['dropped_outside_regular_session']})"
+        )
+        early = [d["date"] for d in m["calendar"] if d["close"] != "16:00"]
+        out.line(f"early close {', '.join(early) or 'none'}")
+        if args.verify:
+            ds.verify()
+            out.line("files       OK (hashes match the manifest)")
+        return EXIT_OK
+    cfg = config.market_data.alpaca
+    symbols = _symbols(args.symbols) or list(config.trading.symbols)
+    key, secret = credentials()
+    out.line(
+        f"downloading {len(symbols)} symbols {args.start}..{args.end} feed={cfg.feed} adjustment={cfg.adjustment}"
+    )
+    with AlpacaHistoricalClient(cfg, key=key, secret=secret) as client:
+        dataset = await asyncio.to_thread(
+            store.download,
+            client,
+            name=args.name,
+            symbols=symbols,
+            start=args.start,
+            end=args.end,
+            feed=cfg.feed,
+            adjustment=cfg.adjustment,
+            timezone=config.trading.exchange_timezone,
+            progress=lambda symbol, bars: out.line(f"  {symbol:<6} {bars} bars"),
+        )
+        requests = client.requests
+    out.line(f"dataset {dataset.name} version {dataset.version} ({requests} requests)")
+    return EXIT_OK
+
+
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _money(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:,.2f}"
+
+
+def _ci(ci: list[float] | tuple[float, float] | None) -> str:
+    return "n/a" if not ci else f"[{ci[0]:,.2f}, {ci[1]:,.2f}]"
+
+
+def print_experiment(out: Console, payload: dict[str, Any]) -> None:
+    out.line(f"experiment        {payload['experiment_id']}")
+    out.line(f"dataset           {payload['dataset']['name']} (version {payload['dataset']['version']})")
+    rng = payload["range"]
+    out.line(
+        f"range             {rng['start']}..{rng['end']}  {rng['sessions']} sessions, {len(payload['folds'])} monthly folds"
+    )
+    out.line(f"symbols           {', '.join(payload['symbols'])}")
+    out.line("")
+    header = f"{'model':<16} {'trades':>7} {'net pnl':>12} {'model pnl':>11} {'exec cost':>10} {'win':>6} {'PF':>5} {'mean/day':>9}  {'95% CI mean/day':<22} {'+folds':>6}"
+    out.line(header)
+    out.line("-" * len(header))
+    for model in payload["models"]:
+        m = payload["summaries"][model]
+        pf = "n/a" if m["profit_factor"] is None else f"{m['profit_factor']:.2f}"
+        out.line(
+            f"{model:<16} {m['trades']:>7} {_money(m['net_pnl']):>12} {_money(m['model_pnl']):>11} "
+            f"{_money(m['execution_shortfall']):>10} {_pct(m['win_rate']):>6} {pf:>5} {_money(m['mean_daily_pnl']):>9}  "
+            f"{_ci(m['mean_daily_pnl_ci95']):<22} {m['positive_folds']:>3}/{len(m['folds'])}"
+        )
+    out.line("")
+    out.line(f"{'model':<16} {'long trades':>11} {'long pnl':>11} {'short trades':>12} {'short pnl':>11}")
+    for model in payload["models"]:
+        m = payload["summaries"][model]
+        out.line(
+            f"{model:<16} {m['long']['trades']:>11} {_money(m['long']['net_pnl']):>11} "
+            f"{m['short']['trades']:>12} {_money(m['short']['net_pnl']):>11}"
+        )
+    out.line("")
+    out.line(f"paired difference vs {payload['reference']} (mean daily net pnl, same sessions):")
+    for model, c in payload["comparisons"].items():
+        verdict = "inconclusive"
+        if c["ci95"] and c["ci95"][0] > 0:
+            verdict = "better"
+        elif c["ci95"] and c["ci95"][1] < 0:
+            verdict = "worse"
+        out.line(
+            f"  {model:<16} {_money(c['mean_daily_difference']):>9}  95% CI {_ci(c['ci95'])}  -> {verdict}"
+        )
+    for model in payload["models"]:
+        api = payload["summaries"][model].get("api")
+        if api:
+            out.line(
+                f"  {model}: {api['api_calls']} API calls, {api['cache_hits']} cached, ~USD {api['estimated_cost_usd']:.4f}"
+            )
+        failed = payload["summaries"][model]["failed_folds"]
+        if failed:
+            out.line(f"  WARNING {model}: folds not completed: {', '.join(failed)}")
+    out.line("")
+    for caveat in payload["caveats"]:
+        out.line(f"note: {caveat}")
+
+
+async def cmd_experiment(args: argparse.Namespace, out: Console) -> int:
+    overrides: dict[str, Any] = {
+        "trading": {"mode": TradingMode.BACKTEST.value},
+        **_dataset_overrides(args.dataset),
+    }
+    if symbols := _symbols(args.symbols):
+        overrides["trading"]["symbols"] = symbols
+    config = _config(args, overrides)
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+
+    def progress(result: JobResult, done: int, total: int) -> None:
+        pnl = sum(t["net_pnl"] for t in result.trades)
+        out.line(
+            f"  [{done}/{total}] {result.model:<16} {result.fold}  {result.status:<9} trades {len(result.trades):>5}  net {pnl:,.2f}"
+        )
+
+    if not args.json:
+        out.line(mode_banner(TradingMode.BACKTEST, config.broker.active, "historical"))
+    result = await run_experiment(
+        config,
+        models=models,
+        reference=args.reference,
+        workers=args.workers,
+        start=args.start,
+        end=args.end,
+        progress=None if args.json else progress,
+    )
+    if args.json:
+        out.json(result.payload)
+    else:
+        out.line("")
+        print_experiment(out, result.payload)
+        out.line(f"details: {(result.output_dir / 'results.json').as_posix()}")
+    return EXIT_OK
+
+
+async def cmd_experiments(args: argparse.Namespace, out: Console) -> int:
+    config = _config(args)
+    database, repo = await _repository(config)
+    try:
+        rows = await repo.list_experiments()
+        for row in rows:
+            out.line(
+                f"{row['experiment_id']}  {row['created_at']}  {row['dataset']}  {', '.join(row['models'])}"
+            )
+        if not rows:
+            out.line("no experiments recorded")
+        return EXIT_OK
+    finally:
+        await database.dispose()
+
+
 COMMANDS = {
     "simulate": cmd_simulate,
     "trace": cmd_trace,
@@ -395,6 +622,9 @@ COMMANDS = {
     "kill-switch": cmd_kill_switch,
     "run": cmd_run,
     "jev-check": cmd_jev_check,
+    "data": cmd_data,
+    "experiment": cmd_experiment,
+    "experiments": cmd_experiments,
 }
 
 
@@ -415,4 +645,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         return EXIT_REFUSED
     except (ConfigError, SafetyError) as exc:
         out.line(f"configuration error: {exc}")
+        return EXIT_CONFIG
+    except DataError as exc:
+        out.line(f"data error: {exc}")
         return EXIT_CONFIG

@@ -1,0 +1,23 @@
+# Phase 3: backtests on real historical data (Alpaca SIP, split-adjusted 1Min bars).
+# Universe agreed on 2026-10-02: index ETFs + liquid large caps from several sectors.
+# CAVEAT: a fixed list of today's large caps has survivorship bias; record it with every result.
+#   python -m apps.trading_engine --config config/profiles/phase3.yaml data download --name sip-2024 --start 2024-01-02 --end 2024-12-31
+#   python -m apps.trading_engine --config config/profiles/phase3.yaml experiment --dataset sip-2024 --models jev-heuristic,baseline-ma,baseline-random,baseline-flat --workers 4
+trading:
+  mode: backtest
+  symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, META, JPM, XOM]
+  timeframe: 1Min
+  decision_timeframe: 1Min
+  horizon_minutes: 15
+
+market_data:
+  provider: historical
+  alpaca:
+    feed: sip
+    adjustment: split
+
+risk:
+  allow_short: true             # agreed: shorts allowed, results reported separately for long and short
+
+logging:
+  level: WARNING

@@ -9,6 +9,7 @@ quantity that is still open, so it can never over-sell.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -33,6 +34,7 @@ from packages.execution.order_store import OrderStore
 log = logging.getLogger(__name__)
 
 EPSILON = 1e-9
+CLOSED_HISTORY = 10_000
 MANAGED_EXIT_INTENTS = frozenset(
     {OrderIntent.TIME_EXIT, OrderIntent.EOD_EXIT, OrderIntent.KILL_EXIT, OrderIntent.RISK_EXIT}
 )
@@ -105,6 +107,8 @@ class PositionManager:
         self._cfg = config
         self._asset_class = asset_class
         self._positions: dict[str, ManagedPosition] = {}
+        # Closed lifecycles leave the working set (timers stay O(open) in long backtests) but remain readable.
+        self._closed: OrderedDict[str, ManagedPosition] = OrderedDict()
         self._exit_failure_listener: ExitFailureListener | None = None
 
     def set_exit_failure_listener(self, listener: ExitFailureListener | None) -> None:
@@ -129,7 +133,7 @@ class PositionManager:
         return position
 
     def attach_entry_order(self, order: Order) -> None:
-        position = self._positions.get(order.signal_id or "")
+        position = self.get(order.signal_id or "")
         if position is None or order.client_order_id != position.entry_client_order_id:
             return
         for leg in order.legs:
@@ -145,10 +149,15 @@ class PositionManager:
             position.stop_loss_id = leg.client_order_id
 
     def get(self, signal_id: str) -> ManagedPosition | None:
-        return self._positions.get(signal_id)
+        position = self._positions.get(signal_id)
+        return position if position is not None else self._closed.get(signal_id)
 
     def active(self) -> list[ManagedPosition]:
-        return [p for p in self._positions.values() if p.state is not LifecycleState.CLOSED]
+        for signal_id in [sid for sid, p in self._positions.items() if p.state is LifecycleState.CLOSED]:
+            self._closed[signal_id] = self._positions.pop(signal_id)
+            if len(self._closed) > CLOSED_HISTORY:
+                self._closed.popitem(last=False)
+        return list(self._positions.values())
 
     def pending_entries(self) -> list[ManagedPosition]:
         return [p for p in self.active() if p.state is LifecycleState.PENDING_ENTRY]
@@ -164,7 +173,7 @@ class PositionManager:
         return expected
 
     def exit_reference(self, signal_id: str, intent: OrderIntent) -> float | None:
-        position = self._positions.get(signal_id)
+        position = self.get(signal_id)
         if position is None:
             return None
         if intent is OrderIntent.TAKE_PROFIT:
@@ -176,7 +185,7 @@ class PositionManager:
     # ------------------------------------------------------------------ reactions
 
     def on_fill(self, fill: Fill) -> ManagedPosition | None:
-        position = self._positions.get(fill.signal_id) if fill.signal_id else None
+        position = self.get(fill.signal_id) if fill.signal_id else None
         if position is None:
             return None
         if fill.intent is OrderIntent.ENTRY:
@@ -193,7 +202,7 @@ class PositionManager:
         return position
 
     async def on_order(self, order: Order) -> None:
-        position = self._positions.get(order.signal_id) if order.signal_id else None
+        position = self.get(order.signal_id) if order.signal_id else None
         if position is None or position.state is LifecycleState.CLOSED:
             return
         if order.parent_client_order_id == position.entry_client_order_id:
@@ -317,6 +326,7 @@ class PositionManager:
     ) -> list[ManagedPosition]:
         """Reconstruct lifecycles from stored orders after a restart."""
         self._positions.clear()
+        self._closed.clear()
         groups: dict[str, list[Order]] = {}
         for order in sorted(orders, key=lambda o: o.created_at):
             if order.signal_id:

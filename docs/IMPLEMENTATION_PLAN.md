@@ -11,7 +11,7 @@ Nunca `JEV → dinero real`.
 | 0 | Inspección | ✅ repositorio vacío; JEV no existía |
 | 1 | Arquitectura, interfaces, entidades, DB, eventos, configuración | ✅ |
 | 2 | Mock market + mock broker + pipeline completo en local | ✅ |
-| 3 | Backtesting real, walk-forward, baselines, JEV v1 entrenado | pendiente |
+| 3 | Backtesting real, walk-forward, baselines, JEV v1 entrenado | 🚧 en curso (datos, backtests y experimentos listos) |
 | 4 | Alpaca Paper (market data + broker) + runner en tiempo real | pendiente — requiere claves paper del usuario |
 | 5 | Motor en tiempo real endurecido + API + WebSockets + métricas | pendiente |
 | 6 | Dashboard React | pendiente |
@@ -55,7 +55,31 @@ PostgreSQL 16. Hallazgos corregidos durante la fase: las salidas por horizonte n
 (el broker las rechazaba y se activaba el kill switch) y el `SqlOrderStore` reconciliaba órdenes de otros runs
 de la misma base de datos.
 
-## Fase 3 — Backtesting y validación de JEV
+## Fase 3 — Backtesting y validación de JEV 🚧
+
+Decisiones del usuario (02/10/2026): universo SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, META, JPM, XOM
+(`config/profiles/phase3.yaml`); histórico **SIP** de Alpaca (plan Basic gratuito, ajustado por splits); cortos
+permitidos con resultados separados largo/corto; variante con decisiones de 5 minutos y horizonte de 30
+(`config/profiles/phase3-5min.yaml`).
+
+Hecho:
+
+- Descarga Alpaca (`data download`): calendario oficial (feriados y cierres anticipados), solo sesión regular,
+  paginación y reintentos; dataset versionado (`manifest.json`, SHA-256 por fichero, `dataset_version`).
+  Formato CSV comprimido en lugar de Parquet para no añadir dependencias.
+- `HistoricalMarketDataAdapter`: el mismo motor, broker simulado y auditoría que en paper; `verify` reproduce las
+  decisiones también sobre datos históricos.
+- Tasas regulatorias reales en `costs` (verificadas el 02/10/2026).
+- Baseline de medias móviles (`baseline-ma`) junto a `baseline-random` y `baseline-flat`.
+- `experiment`: varios modelos, mismos datos y folds mensuales, en paralelo; PnL diario con IC 95 % bootstrap,
+  largo/corto, por fold y símbolo, comparación pareada contra un modelo de referencia; `results.json` y tabla
+  `experiments`.
+- `walk_forward` con embargo (utilidad lista para los modelos entrenados).
+- Rendimiento: backtests ~2,3 veces más rápidos y lineales en la duración (índices de órdenes abiertas, caché
+  write-through del store, escrituras de auditoría en una transacción).
+
+Pendiente: modelos entrenados (regresión logística, random forest, gradient boosting, JEV v1) con walk-forward y
+tests anti-leakage; universo dinámico por volumen; spreads reales (quotes); SSR y coste de préstamo; Buy & Hold.
 
 Candidato ya preparado: el adaptador `typesafe-jev` (TypeSafe Jev, desactivado por defecto; ver
 [JEV_TYPESAFE.md](JEV_TYPESAFE.md)). Entra en la Fase 3 como un modelo más a validar contra los baselines, no como

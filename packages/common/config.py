@@ -74,9 +74,27 @@ class SyntheticMarketSection(Section):
     outlier_rate: float = Field(default=0.0, ge=0, le=1)
 
 
+class AlpacaDataSection(Section):
+    """Alpaca market data (historical download in phase 3; real-time stream in phase 4)."""
+
+    feed: Literal["sip", "iex"] = "sip"  # sip = consolidated tape; iex = a single exchange
+    adjustment: Literal["raw", "split", "dividend", "all"] = "split"
+    data_url: str = "https://data.alpaca.markets"
+    trading_url: str = "https://paper-api.alpaca.markets"  # paper only: used for the trading calendar
+    page_limit: int = Field(default=10_000, ge=1, le=10_000)
+    min_request_interval_seconds: float = Field(default=0.35, ge=0)  # Basic plan: 200 requests/minute
+
+
+class HistoricalDataSection(Section):
+    root: str = "data/datasets"
+    dataset: str | None = None  # name of a downloaded dataset (python -m apps.trading_engine data list)
+
+
 class MarketDataSection(Section):
-    provider: Literal["mock", "alpaca", "ibkr"] = "mock"
+    provider: Literal["mock", "historical", "alpaca", "ibkr"] = "mock"
     mock: SyntheticMarketSection = Field(default_factory=SyntheticMarketSection)
+    alpaca: AlpacaDataSection = Field(default_factory=AlpacaDataSection)
+    historical: HistoricalDataSection = Field(default_factory=HistoricalDataSection)
 
 
 class MockBrokerSection(Section):

@@ -144,8 +144,9 @@ Efectos:
 ## 9. Restricciones del broker que el riesgo respeta
 
 Poder de compra, *shortability* / *easy-to-borrow*, cantidad mínima e incremento, tick, soporte de bracket y de
-fraccionales (`BrokerCapabilities` + `InstrumentInfo`). Reglas regulatorias del broker (p. ej. *pattern day trader*)
-se incorporarán con el adapter de Alpaca y deben verificarse con la documentación vigente.
+fraccionales (`BrokerCapabilities` + `InstrumentInfo`). Reglas regulatorias: la de *pattern day trader* fue
+eliminada (efectiva el 04/06/2026, sustituida por margen intradía según exposición); la SSR (SEC Rule 201) y el
+coste de préstamo de cortos se incorporarán con el adapter de Alpaca (Fase 4). Verificar siempre lo vigente.
 
 ## 10. Lo que el Risk Engine nunca hace
 

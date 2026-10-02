@@ -36,9 +36,15 @@ IMMEDIATE_TOPICS = frozenset({Topics.ORDER_EVENT, Topics.TRADE, Topics.RISK_EVEN
 
 
 class AuditRecorder:
-    def __init__(self, repository: AuditRepository, config: PersistenceSection) -> None:
+    def __init__(
+        self, repository: AuditRepository, config: PersistenceSection, *, immediate_writes: bool = True
+    ) -> None:
+        """`immediate_writes=False` (backtests) batches order events and trades too. The audit barrier before
+        every order is unaffected: `bus.flush()` still makes the whole decision chain durable first."""
         self._repo = repository
         self._cfg = config
+        self._immediate = immediate_writes
+        self._next_auto_flush = config.batch_size  # grows after failures: no retry storm while the DB is down
         self._bars: list[dict[str, Any]] = []
         self._features: list[dict[str, Any]] = []
         self._predictions: list[dict[str, Any]] = []
@@ -110,37 +116,42 @@ class AuditRecorder:
         else:
             return
         self._pending += 1
-        if topic in IMMEDIATE_TOPICS or self._pending >= cfg.batch_size:
+        if (self._immediate and topic in IMMEDIATE_TOPICS) or self._pending >= self._next_auto_flush:
             await self.flush()
 
     async def flush(self) -> None:
-        """Write buffered records in dependency order. Buffers are cleared only after a successful write."""
+        """Write every buffered record in ONE transaction, in dependency order. Buffers are cleared only after
+        the transaction commits, so a failed write loses nothing and partial batches are never stored."""
+        if self._pending == 0 and not self._accounts:
+            return
         repo = self._repo
-        await repo.insert_bars(self._bars)
-        self._bars = []
-        await repo.insert_features(self._features)
-        self._features = []
-        await repo.insert_predictions(self._predictions)
-        self._predictions = []
-        await repo.update_prediction_outcomes(self._outcomes)
-        self._outcomes = []
-        await repo.upsert_signals(list(self._signals.values()))
-        self._signals = {}
-        await repo.insert_risk_decisions(self._decisions)
-        self._decisions = []
-        await repo.insert_order_events(self._order_events)
-        self._order_events = []
-        await repo.insert_trades(self._trades)
-        self._trades = []
-        await repo.insert_snapshots(self._snapshots)
-        self._snapshots = []
-        await repo.insert_risk_events(self._risk_events)
-        self._risk_events = []
-        await repo.insert_system_events(self._system_events)
-        self._system_events = []
-        await repo.insert_broker_events(self._broker_events)
-        self._broker_events = []
-        for account, capabilities, seen_at in self._accounts:
-            await repo.upsert_broker_account(account, capabilities, seen_at=seen_at)
+        try:
+            await self._write(repo)
+        except Exception:
+            # Keep everything buffered; retry automatically only once the backlog has doubled. The audit
+            # barrier before an order (bus.flush) always retries, so no order can skip a failed write.
+            self._next_auto_flush = max(self._cfg.batch_size, 2 * self._pending)
+            raise
+        self._next_auto_flush = self._cfg.batch_size
+        self._bars, self._features, self._predictions, self._outcomes = [], [], [], []
+        self._signals, self._decisions, self._order_events, self._trades = {}, [], [], []
+        self._snapshots, self._risk_events, self._system_events, self._broker_events = [], [], [], []
         self._accounts = []
         self._pending = 0
+
+    async def _write(self, repo: AuditRepository) -> None:
+        async with repo.transaction() as session:
+            await repo.insert_bars(self._bars, session=session)
+            await repo.insert_features(self._features, session=session)
+            await repo.insert_predictions(self._predictions, session=session)
+            await repo.update_prediction_outcomes(self._outcomes, session=session)
+            await repo.upsert_signals(list(self._signals.values()), session=session)
+            await repo.insert_risk_decisions(self._decisions, session=session)
+            await repo.insert_order_events(self._order_events, session=session)
+            await repo.insert_trades(self._trades, session=session)
+            await repo.insert_snapshots(self._snapshots, session=session)
+            await repo.insert_risk_events(self._risk_events, session=session)
+            await repo.insert_system_events(self._system_events, session=session)
+            await repo.insert_broker_events(self._broker_events, session=session)
+            for account, capabilities, seen_at in self._accounts:
+                await repo.upsert_broker_account(account, capabilities, seen_at=seen_at, session=session)

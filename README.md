@@ -18,7 +18,8 @@ de ejecución.
 | 0 | Inspección (repositorio vacío; JEV no existía) | ✅ |
 | 1 | Arquitectura, interfaces, entidades, configuración | ✅ |
 | 2 | Mock market + mock broker + pipeline completo en local | ✅ |
-| 3–10 | Backtesting, Alpaca Paper, API, dashboard, shadow, IBKR, comparación, live readiness | pendiente |
+| 3 | Datos históricos (Alpaca SIP), backtests y experimentos entre modelos | 🚧 en curso |
+| 4–10 | Alpaca Paper, API, dashboard, shadow, IBKR, comparación, live readiness | pendiente |
 
 **Importante:** JEV aún no es un modelo validado. La versión incluida (`jev-heuristic 0.1.0`) es un sustituto
 transparente para ejercitar el pipeline; no se le atribuye ninguna ventaja. Los datos actuales son sintéticos.
@@ -58,6 +59,27 @@ motor ejecutando una simulación).
 Opciones útiles de `simulate`: `--symbols MOCKA,MOCKB`, `--model baseline-random|baseline-flat`, `--run-id`,
 `--max-events N` (simula una caída), `--json`. Configuración: `config/default.yaml`, perfiles con `--config`,
 variables `JEV__SECCION__CLAVE` y `--db` / `DATABASE_URL`.
+
+## Fase 3: datos reales y experimentos
+
+Requiere las claves **paper** de Alpaca en `.env` (`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`). El plan gratuito
+basta para el histórico SIP.
+
+```bash
+# 1. Descargar un año de barras de 1 minuto del universo acordado (~250 peticiones; respeta 200/min)
+python -m apps.trading_engine --config config/profiles/phase3.yaml data download --name sip-2024 --start 2024-01-02 --end 2024-12-31
+python -m apps.trading_engine data info sip-2024 --verify
+
+# 2. Un backtest sobre datos reales (mismo motor, auditoría y verify que en simulación)
+python -m apps.trading_engine --config config/profiles/phase3.yaml simulate --dataset sip-2024 --start 2024-01-02 --end 2024-01-31
+
+# 3. Comparar modelos fold a fold (meses), en paralelo
+python -m apps.trading_engine --config config/profiles/phase3.yaml experiment --dataset sip-2024 \
+    --models jev-heuristic,baseline-ma,baseline-random,baseline-flat --reference baseline-flat --workers 4
+```
+
+Duración orientativa: ~2 s por símbolo y día con un modelo que opera mucho, dividido entre los procesos.
+Empieza con un mes (`--start/--end`) antes de lanzar el año completo.
 
 ## JEV con TypeSafe (opcional, desactivado)
 

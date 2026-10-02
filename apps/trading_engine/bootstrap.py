@@ -24,6 +24,7 @@ from packages.common.calendar import RegularHoursCalendar
 from packages.common.clock import Clock, SimulatedClock
 from packages.common.config import AppConfig
 from packages.common.costs import CostModel
+from packages.common.entities import Trade
 from packages.common.enums import HealthState, TradingMode
 from packages.common.errors import ConfigError
 from packages.common.events import EventBus
@@ -40,7 +41,9 @@ from packages.jev.registry import build_model
 from packages.jev.typesafe import TypeSafeJEVModel
 from packages.market_data.aggregator import BarAggregator
 from packages.market_data.base import MarketDataAdapter
+from packages.market_data.dataset import Dataset, DatasetStore
 from packages.market_data.engine import MarketDataEngine
+from packages.market_data.historical import HistoricalMarketDataAdapter
 from packages.market_data.mock import MockMarketDataAdapter
 from packages.persistence.database import Database
 from packages.persistence.recorder import AuditRecorder
@@ -172,7 +175,7 @@ class EngineContext:
     clock: SimulatedClock
     calendar: RegularHoursCalendar
     bus: EventBus
-    market_data: MockMarketDataAdapter
+    market_data: MarketDataAdapter
     broker: MockBrokerAdapter
     router: BrokerRouter
     database: Database
@@ -184,6 +187,7 @@ class EngineContext:
     execution: BrokerExecutionEngine
     engine: TradingEngine
     runner: SimulationRunner
+    dataset: Dataset | None = None
 
 
 @dataclass
@@ -196,19 +200,37 @@ class SimulationReport:
     performance: PerformanceReport
     broker_submissions: int
     extra: dict[str, Any] = field(default_factory=dict)
+    trades: list[Trade] = field(default_factory=list)
+
+
+def load_dataset(config: AppConfig) -> Dataset | None:
+    """The dataset a historical simulation replays (None for the synthetic market)."""
+    if config.market_data.provider != "historical":
+        return None
+    name = config.market_data.historical.dataset
+    if not name:
+        raise ConfigError("market_data.historical.dataset is not set (use --dataset NAME)")
+    dataset = DatasetStore(config.market_data.historical.root).load(name)
+    missing = sorted(set(config.trading.symbols) - set(dataset.symbols))
+    if missing:
+        raise ConfigError(f"dataset {name} has no data for {missing}")
+    if config.trading.timeframe.minutes != 1:
+        raise ConfigError(
+            "datasets hold 1Min bars: keep trading.timeframe at 1Min (decision_timeframe may be coarser)"
+        )
+    return dataset
 
 
 async def build_simulation(config: AppConfig, options: SimulationOptions) -> EngineContext:
     mode = TradingMode.BACKTEST
     enforce_mode_gate(mode, config.broker.mode)
-    if config.market_data.provider != "mock":
-        raise ConfigError(
-            "simulations run on the mock market in phase 2 (historical data arrives in phase 3)"
-        )
+    if config.market_data.provider not in ("mock", "historical"):
+        raise ConfigError("simulations run on the mock market or a downloaded dataset (market_data.provider)")
     if options.end < options.start:
         raise ConfigError("end date must not be before start date")
     trading = config.trading
-    calendar = build_calendar(config)
+    dataset = load_dataset(config)
+    calendar = dataset.calendar(trading.exchange_timezone) if dataset is not None else build_calendar(config)
     first = next(calendar.sessions_between(options.start, options.end), None)
     if first is None:
         raise ConfigError(f"no trading session between {options.start} and {options.end}")
@@ -220,9 +242,17 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
 
     bus = EventBus()
     costs = CostModel(config.costs)
-    market = MockMarketDataAdapter(
-        config.market_data.mock, calendar, start=options.start, end=options.end, timeframe=trading.timeframe
-    )
+    market: MarketDataAdapter
+    if dataset is not None:
+        market = HistoricalMarketDataAdapter(dataset, start=options.start, end=options.end)
+    else:
+        market = MockMarketDataAdapter(
+            config.market_data.mock,
+            calendar,
+            start=options.start,
+            end=options.end,
+            timeframe=trading.timeframe,
+        )
     adapters: dict[str, BrokerAdapter]
     if options.broker is not None:
         options.broker.set_clock(clock)
@@ -240,7 +270,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
     await database.create_all()
     repository = AuditRepository(database, run_id=run.run_id, mode=mode)
     store = SqlOrderStore(database, mode=mode, run_id=run.run_id)
-    AuditRecorder(repository, config.persistence).attach(bus)
+    AuditRecorder(repository, config.persistence, immediate_writes=False).attach(bus)  # backtest: batched
     state_store = ScopedStateStore(repository, state_prefix(run))
 
     spec = FeatureSpec.from_config(config.features)
@@ -336,6 +366,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         execution=execution,
         engine=engine,
         runner=runner,
+        dataset=dataset,
     )
 
 
@@ -357,13 +388,14 @@ async def run_simulation(
     window_start = next(ctx.calendar.sessions_between(options.start, options.end)).open
     window_end = list(ctx.calendar.sessions_between(options.start, options.end))[-1].close
     symbols = list(config.trading.symbols)
+    dataset_version = ctx.dataset.version if ctx.dataset is not None else None
     status = "FAILED"
     try:
         await repo.register_model_version(ctx.model.metadata, created_at=ctx.clock.now())
         await repo.save_run(run, config, ctx.model.metadata)
         await repo.save_backtest_run(
             run, config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
-            metrics=None, finished_at=None, status="RUNNING",
+            metrics=None, finished_at=None, status="RUNNING", dataset_version=dataset_version,
         )  # fmt: skip
         await ctx.engine.start()
         result = await ctx.runner.run()
@@ -375,7 +407,7 @@ async def run_simulation(
             await ctx.engine.stop()
         await repo.save_backtest_run(
             run, config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
-            metrics=metrics, finished_at=ctx.clock.now(), status=status,
+            metrics=metrics, finished_at=ctx.clock.now(), status=status, dataset_version=dataset_version,
         )  # fmt: skip
         await repo.finish_run(stopped_at=ctx.clock.now(), status=status, summary=_jsonable_summary(summary))
         return SimulationReport(
@@ -386,7 +418,15 @@ async def run_simulation(
             summary=summary,
             performance=performance,
             broker_submissions=ctx.execution.broker_submissions,
-            extra=model_usage(ctx.model),
+            extra={
+                **model_usage(ctx.model),
+                **(
+                    {"dataset": {"name": ctx.dataset.name, "version": ctx.dataset.version}}
+                    if ctx.dataset
+                    else {}
+                ),
+            },
+            trades=ctx.engine.ledger.closed,
         )
     except BaseException:
         with contextlib.suppress(Exception):  # the original error matters more than this bookkeeping

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from packages.common.config import ModelSection
 from packages.common.errors import ConfigError
 from packages.jev.base import JEVModel
-from packages.jev.baselines import FlatJEVModel, RandomJEVModel
+from packages.jev.baselines import FlatJEVModel, MovingAverageJEVModel, RandomJEVModel
 from packages.jev.heuristic import HeuristicJEVModel
 from packages.jev.typesafe import RUNTIME_KEYS as TYPESAFE_RUNTIME_KEYS
 from packages.jev.typesafe import TypeSafeJEVModel
@@ -30,6 +30,7 @@ MODEL_FACTORIES: dict[str, _ModelFactory] = {
     HeuristicJEVModel.NAME: HeuristicJEVModel,
     RandomJEVModel.NAME: RandomJEVModel,
     FlatJEVModel.NAME: FlatJEVModel,
+    MovingAverageJEVModel.NAME: MovingAverageJEVModel,
     TypeSafeJEVModel.NAME: TypeSafeJEVModel,  # remote, disabled unless selected explicitly
 }
 

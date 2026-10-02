@@ -1,0 +1,20 @@
+# Phase 3 variant: decisions on 5-minute bars with a 30-minute horizon (bigger moves relative to the spread,
+# 5x fewer decisions, so also 5x fewer TypeSafe Jev calls). Combine with --dataset; same universe as phase3.yaml.
+trading:
+  mode: backtest
+  symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, META, JPM, XOM]
+  timeframe: 1Min
+  decision_timeframe: 5Min
+  horizon_minutes: 30
+
+market_data:
+  provider: historical
+  alpaca:
+    feed: sip
+    adjustment: split
+
+risk:
+  allow_short: true
+
+logging:
+  level: WARNING

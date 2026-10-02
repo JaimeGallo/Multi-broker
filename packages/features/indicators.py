@@ -28,9 +28,13 @@ def ema_series(values: FloatArray, period: int) -> FloatArray:
     if len(values) < period:
         return out
     alpha = 2.0 / (period + 1.0)
-    out[period - 1] = float(np.mean(values[:period]))
-    for i in range(period, len(values)):
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
+    previous = float(np.mean(values[:period]))
+    out[period - 1] = previous
+    # Plain Python floats: same IEEE arithmetic as numpy scalars, several times faster in a loop.
+    data = values.tolist()
+    for i in range(period, len(data)):
+        previous = alpha * data[i] + (1.0 - alpha) * previous
+        out[i] = previous
     return out
 
 
@@ -39,9 +43,12 @@ def wilder_series(values: FloatArray, period: int) -> FloatArray:
     out = np.full(len(values), np.nan)
     if len(values) < period:
         return out
-    out[period - 1] = float(np.mean(values[:period]))
-    for i in range(period, len(values)):
-        out[i] = (out[i - 1] * (period - 1) + values[i]) / period
+    previous = float(np.mean(values[:period]))
+    out[period - 1] = previous
+    data = values.tolist()
+    for i in range(period, len(data)):
+        previous = (previous * (period - 1) + data[i]) / period
+        out[i] = previous
     return out
 
 

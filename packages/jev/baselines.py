@@ -98,3 +98,67 @@ class FlatJEVModel(JEVModel):
             expected_volatility=0.0,
             confidence=0.0,
         )
+
+
+class MovingAverageJEVModel(JEVModel):
+    """Trend-following control: LONG when the fast EMA is above the slow EMA, SHORT when below.
+
+    Deterministic, no training. The fixed probability is a parameter, not an estimate: it only has to clear the
+    Signal Engine's minimum so the baseline's trades are evaluated under the same costs and risk rules.
+    """
+
+    NAME = "baseline-ma"
+    REQUIRED = ("ema_12_dist", "ema_26_dist", "realized_vol_30")
+
+    def __init__(
+        self,
+        *,
+        namespace: str,
+        version: str,
+        feature_version: str,
+        horizon_minutes: int,
+        bar_minutes: int,
+        params: Mapping[str, Any] | None = None,
+    ) -> None:
+        options = dict(params or {})
+        self._probability = float(options.get("probability", 0.58))
+        self._min_gap = float(options.get("min_gap", 0.0002))
+        self._edge_scale = float(options.get("edge_scale", 0.5))
+        self._horizon_bars = horizon_minutes / bar_minutes
+        metadata = ModelMetadata(
+            model_name=self.NAME,
+            model_version=version,
+            feature_version=feature_version,
+            horizon_minutes=horizon_minutes,
+            params={
+                "probability": self._probability,
+                "min_gap": self._min_gap,
+                "edge_scale": self._edge_scale,
+            },
+            description="EMA(12)/EMA(26) trend control model.",
+        )
+        super().__init__(metadata, namespace=namespace)
+
+    @property
+    def required_features(self) -> tuple[str, ...]:
+        return self.REQUIRED
+
+    def predict(self, features: FeatureVector) -> JEVPrediction:
+        # close/ema - 1 for both averages: the fast EMA is above the slow one when its distance is smaller.
+        gap = features.values["ema_26_dist"] - features.values["ema_12_dist"]
+        vol = max(features.values["realized_vol_30"], 1e-6) * math.sqrt(self._horizon_bars)
+        if abs(gap) < self._min_gap:
+            probability_up = probability_down = 0.5
+        elif gap > 0:
+            probability_up, probability_down = self._probability, 1.0 - self._probability
+        else:
+            probability_up, probability_down = 1.0 - self._probability, self._probability
+        return self._prediction(
+            features,
+            direction=decide_direction(probability_up, probability_down, 0.55),
+            probability_up=probability_up,
+            probability_down=probability_down,
+            expected_return=(probability_up - probability_down) * vol * self._edge_scale,
+            expected_volatility=vol,
+            confidence=min(1.0, abs(probability_up - probability_down) / 0.3),
+        )

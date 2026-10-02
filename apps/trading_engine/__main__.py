@@ -2,4 +2,5 @@
 
 from apps.trading_engine.cli import main
 
-raise SystemExit(main())
+if __name__ == "__main__":  # required: experiment workers are spawned processes that re-import this module
+    raise SystemExit(main())

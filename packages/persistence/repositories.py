@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any, cast
 
 from sqlalchemy import Table, bindparam, func, inspect, select, update
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.common.config import AppConfig
 from packages.common.entities import (
@@ -36,6 +38,7 @@ from packages.persistence.models import (
     BrokerAccountRow,
     BrokerEventRow,
     EngineRunRow,
+    ExperimentRow,
     FeatureRow,
     MarketBarRow,
     ModelVersionRow,
@@ -104,32 +107,65 @@ def _order_from_row(row: OrderRow) -> Order:
 
 
 class SqlOrderStore:
+    """Durable order store with a write-through, in-memory view of this engine's orders.
+
+    Every `save` is written to the database before the in-memory view changes, so the database stays the
+    source of truth for restarts. Reads are served from memory: this engine is the only writer of its scope
+    (one run in backtest/replay, its mode in paper/shadow), whose orders are loaded once on first use.
+    """
+
     def __init__(self, db: Database, *, mode: TradingMode, run_id: str) -> None:
         self._db = db
         self._mode = mode
         self._run_id = run_id
+        self._orders: dict[str, Order] | None = None
+        self._open: set[str] = set()
+        self._by_signal: dict[str, list[str]] = {}
+        self._upsert: Any = None
+
+    async def _view(self) -> dict[str, Order]:
+        if self._orders is None:
+            self._orders = {}
+            for order in await self._query(self._scoped().order_by(OrderRow.created_at)):
+                self._index(order)
+        return self._orders
+
+    def _index(self, order: Order) -> None:
+        assert self._orders is not None
+        cid = order.client_order_id
+        if cid not in self._orders and order.signal_id:
+            self._by_signal.setdefault(order.signal_id, []).append(cid)
+        self._orders[cid] = order
+        if order.is_terminal:
+            self._open.discard(cid)
+        else:
+            self._open.add(cid)
 
     async def get(self, client_order_id: str) -> Order | None:
-        async with self._db.sessions() as session:
-            row = await session.get(OrderRow, client_order_id)
-            return _order_from_row(row) if row is not None else None
+        order = (await self._view()).get(client_order_id)
+        return order.model_copy(deep=True) if order is not None else None
 
     async def save(self, order: Order) -> None:
-        values = _order_values(order)
+        await self._view()
+        values = {"client_order_id": order.client_order_id, "mode": self._mode.value, "run_id": self._run_id}
+        values.update(_order_values(order))
         async with self._db.sessions() as session, session.begin():
-            row = await session.get(OrderRow, order.client_order_id)
-            if row is None:
-                session.add(
-                    OrderRow(
-                        client_order_id=order.client_order_id,
-                        mode=self._mode.value,
-                        run_id=self._run_id,
-                        **values,
-                    )
-                )
-            else:
-                for key, value in values.items():
-                    setattr(row, key, value)
+            await session.execute(self._upsert_statement(), [values])
+        stored = order.model_copy(deep=True)
+        stored.legs = []
+        self._index(stored)
+
+    def _upsert_statement(self) -> Any:
+        """Single-statement insert-or-update, built once (one round trip per save)."""
+        if self._upsert is None:
+            dialect = postgresql if self._db.dialect == "postgresql" else sqlite
+            statement = dialect.insert(OrderRow)
+            fixed = ("client_order_id", "mode", "run_id")
+            columns = [c.name for c in OrderRow.__table__.columns if c.name not in fixed]
+            self._upsert = statement.on_conflict_do_update(
+                index_elements=["client_order_id"], set_={name: statement.excluded[name] for name in columns}
+            )
+        return self._upsert
 
     def _scoped(self) -> Any:
         """Orders of this engine only: one run in backtest/replay, every run of the mode in paper/shadow
@@ -139,18 +175,22 @@ class SqlOrderStore:
             statement = statement.where(OrderRow.run_id == self._run_id)
         return statement
 
+    async def _select(self, ids: Any, keep: Any = None) -> list[Order]:
+        view = await self._view()
+        orders = [view[cid] for cid in ids if keep is None or keep(view[cid])]
+        orders.sort(key=lambda o: (o.created_at, o.client_order_id))
+        return [o.model_copy(deep=True) for o in orders]
+
     async def list_open(self, broker: str | None = None) -> list[Order]:
-        statement = self._scoped().where(OrderRow.status.not_in(TERMINAL_STATUSES))
-        if broker is not None:
-            statement = statement.where(OrderRow.broker == broker)
-        return await self._query(statement.order_by(OrderRow.created_at))
+        await self._view()
+        return await self._select(list(self._open), lambda o: broker is None or o.broker == broker)
 
     async def list_by_signal(self, signal_id: str) -> list[Order]:
-        statement = self._scoped().where(OrderRow.signal_id == signal_id).order_by(OrderRow.created_at)
-        return await self._query(statement)
+        await self._view()
+        return await self._select(list(self._by_signal.get(signal_id, ())))
 
     async def list_all(self) -> list[Order]:
-        return await self._query(self._scoped().order_by(OrderRow.created_at))
+        return await self._select(list(await self._view()))
 
     async def _query(self, statement: Any) -> list[Order]:
         async with self._db.sessions() as session:
@@ -176,14 +216,34 @@ class AuditRepository:
             return sqlite.insert(model)
         raise NotImplementedError(f"unsupported database dialect: {self._db.dialect}")
 
-    async def _insert_ignore(self, model: type[Base], rows: Sequence[Mapping[str, Any]]) -> None:
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[AsyncSession]:
+        """One transaction for several writes (the recorder flushes all its buffers atomically)."""
+        async with self._db.sessions() as session, session.begin():
+            yield session
+
+    async def _execute(
+        self, statement: Any, rows: list[dict[str, Any]], session: AsyncSession | None
+    ) -> None:
+        if session is not None:
+            await session.execute(statement, rows)
+            return
+        async with self.transaction() as own:
+            await own.execute(statement, rows)
+
+    async def _insert_ignore(
+        self, model: type[Base], rows: Sequence[Mapping[str, Any]], session: AsyncSession | None = None
+    ) -> None:
         if not rows:
             return
-        async with self._db.sessions() as session, session.begin():
-            await session.execute(self._insert(model).on_conflict_do_nothing(), [dict(r) for r in rows])
+        await self._execute(self._insert(model).on_conflict_do_nothing(), [dict(r) for r in rows], session)
 
     async def _upsert(
-        self, model: type[Base], rows: Sequence[Mapping[str, Any]], keys: Sequence[str]
+        self,
+        model: type[Base],
+        rows: Sequence[Mapping[str, Any]],
+        keys: Sequence[str],
+        session: AsyncSession | None = None,
     ) -> None:
         if not rows:
             return
@@ -192,8 +252,7 @@ class AuditRepository:
         statement = statement.on_conflict_do_update(
             index_elements=list(keys), set_={name: statement.excluded[name] for name in columns}
         )
-        async with self._db.sessions() as session, session.begin():
-            await session.execute(statement, [dict(r) for r in rows])
+        await self._execute(statement, [dict(r) for r in rows], session)
 
     # ---- runs, models, accounts, state
 
@@ -288,6 +347,14 @@ class AuditRepository:
             ],
         )
 
+    async def save_experiment(self, row: Mapping[str, Any]) -> None:
+        await self._upsert(ExperimentRow, [row], ["experiment_id"])
+
+    async def list_experiments(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        statement = select(ExperimentRow).order_by(ExperimentRow.created_at.desc()).limit(limit)
+        async with self._db.sessions() as session:
+            return [row_to_dict(row) for row in (await session.execute(statement)).scalars().all()]
+
     async def model_params(self, model_name: str, model_version: str) -> dict[str, Any] | None:
         async with self._db.sessions() as session:
             row = (
@@ -301,7 +368,12 @@ class AuditRepository:
             return dict(row.params) if row is not None else None
 
     async def upsert_broker_account(
-        self, account: AccountSnapshot, capabilities: BrokerCapabilities, *, seen_at: datetime
+        self,
+        account: AccountSnapshot,
+        capabilities: BrokerCapabilities,
+        *,
+        seen_at: datetime,
+        session: AsyncSession | None = None,
     ) -> None:
         await self._upsert(
             BrokerAccountRow,
@@ -317,6 +389,7 @@ class AuditRepository:
                 }
             ],
             ["broker", "account_ref"],
+            session,
         )
 
     async def get_state(self, key: str) -> dict[str, Any] | None:
@@ -329,40 +402,65 @@ class AuditRepository:
 
     # ---- batched audit writes (called by AuditRecorder)
 
-    async def insert_bars(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(MarketBarRow, rows)
+    async def insert_bars(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(MarketBarRow, rows, session)
 
-    async def insert_features(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(FeatureRow, rows)
+    async def insert_features(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(FeatureRow, rows, session)
 
-    async def insert_predictions(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(PredictionRow, rows)
+    async def insert_predictions(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(PredictionRow, rows, session)
 
-    async def upsert_signals(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._upsert(SignalRow, rows, ["signal_id"])
+    async def upsert_signals(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._upsert(SignalRow, rows, ["signal_id"], session)
 
-    async def insert_risk_decisions(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(RiskDecisionRow, rows)
+    async def insert_risk_decisions(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(RiskDecisionRow, rows, session)
 
-    async def insert_order_events(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(OrderEventRow, rows)
+    async def insert_order_events(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(OrderEventRow, rows, session)
 
-    async def insert_trades(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(BacktestTradeRow if self.mode in BACKTEST_MODES else TradeRow, rows)
+    async def insert_trades(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        model = BacktestTradeRow if self.mode in BACKTEST_MODES else TradeRow
+        await self._insert_ignore(model, rows, session)
 
-    async def insert_snapshots(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(PortfolioSnapshotRow, rows)
+    async def insert_snapshots(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(PortfolioSnapshotRow, rows, session)
 
-    async def insert_risk_events(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(RiskEventRow, rows)
+    async def insert_risk_events(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(RiskEventRow, rows, session)
 
-    async def insert_system_events(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(SystemEventRow, rows)
+    async def insert_system_events(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(SystemEventRow, rows, session)
 
-    async def insert_broker_events(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        await self._insert_ignore(BrokerEventRow, rows)
+    async def insert_broker_events(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
+        await self._insert_ignore(BrokerEventRow, rows, session)
 
-    async def update_prediction_outcomes(self, rows: Sequence[Mapping[str, Any]]) -> None:
+    async def update_prediction_outcomes(
+        self, rows: Sequence[Mapping[str, Any]], *, session: AsyncSession | None = None
+    ) -> None:
         if not rows:
             return
         table = cast(Table, PredictionRow.__table__)  # Core table: executemany with custom bind names
@@ -375,8 +473,7 @@ class AuditRepository:
                 resolved_at=bindparam("b_resolved", type_=UTCDateTime()),
             )
         )
-        async with self._db.sessions() as session, session.begin():
-            await session.execute(statement, [dict(r) for r in rows])
+        await self._execute(statement, [dict(r) for r in rows], session)
 
     # ---- row builders
 

@@ -376,6 +376,22 @@ class BacktestRunRow(Base):
     git_commit: Mapped[str | None] = mapped_column(String(64))
 
 
+class ExperimentRow(Base):
+    """Experiment tracking (phase 3): which models, data, folds, configuration and code produced which results."""
+
+    __tablename__ = "experiments"
+    experiment_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    dataset: Mapped[str] = mapped_column(String(96))
+    dataset_version: Mapped[str] = mapped_column(String(64))
+    models: Mapped[list[str]] = mapped_column(JsonType)
+    folds: Mapped[list[dict[str, Any]]] = mapped_column(JsonType)
+    config: Mapped[dict[str, Any]] = mapped_column(JsonType)
+    git_commit: Mapped[str | None] = mapped_column(String(64))
+    output_dir: Mapped[str] = mapped_column(String(512))
+    results: Mapped[dict[str, Any]] = mapped_column(JsonType)
+
+
 class BrokerAccountRow(Base):
     __tablename__ = "broker_accounts"
     __table_args__ = (UniqueConstraint("broker", "account_ref", name="uq_broker_accounts"),)

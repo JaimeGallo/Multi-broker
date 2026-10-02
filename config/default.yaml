@@ -20,7 +20,13 @@ trading:
   session_close: "16:00"
 
 market_data:
-  provider: mock                # mock | alpaca (phase 4) | ibkr (phase 8)
+  provider: mock                # mock | historical (downloaded dataset) | alpaca (phase 4) | ibkr (phase 8)
+  alpaca:                       # historical download (phase 3); keys come from APCA_API_KEY_ID / APCA_API_SECRET_KEY
+    feed: sip                   # sip (consolidated, free for history older than 15 min) | iex (one exchange)
+    adjustment: split           # split-adjusted prices: no fake gaps on split days
+  historical:
+    root: data/datasets
+    dataset: null               # set by profile or --dataset
   mock:                         # deterministic synthetic market (NOT real data)
     seed: 7
     start_price: 100.0
@@ -101,9 +107,13 @@ costs:
   commission_per_share: 0.0     # verify your broker's current fee schedule
   commission_bps: 0.0
   min_commission: 0.0
-  sec_fee_rate: 0.0             # fraction of SELL notional — set from the current SEC Section 31 rate
-  taf_per_share: 0.0            # FINRA TAF on SELLS — set from the current schedule
-  taf_max_per_trade: 0.0
+  # Regulatory fees on SELLS, verified 2026-10-02 (re-check before relying on them):
+  #   SEC Section 31: USD 20.60 per million of sale proceeds since 2026-04-04 (fee rate advisory FY2026)
+  #   FINRA TAF: USD 0.000195 per share, max USD 9.79 per trade (paused 2026-10-01..2026-12-31; kept here
+  #   on purpose as a conservative cost)
+  sec_fee_rate: 0.0000206       # fraction of SELL notional
+  taf_per_share: 0.000195
+  taf_max_per_trade: 9.79
   latency_ms: 250
   latency_cost_factor: 0.5
 

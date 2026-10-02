@@ -137,8 +137,10 @@ Solo APIs oficiales, solo **paper**. Nada de scraping ni clicks.
 - **Límites de uso:** respetar el *rate limit* de la API (verificar el valor vigente); las consultas por decisión
   se limitan a la cuenta y al instrumento, solo cuando una señal es elegible.
 - **Restricciones que el Risk Engine debe conocer:** brackets no admiten fraccionales ni *extended hours*;
-  los cortos requieren cuenta de margen y acciones *easy-to-borrow*; reglas de *pattern day trader*
-  vigentes del broker (verificar).
+  los cortos requieren cuenta de margen y acciones *easy-to-borrow*; la *short sale rule* (SEC Rule 201, SSR)
+  restringe cortos tras una caída del 10 % y aún no se modela. La regla de *pattern day trader* (USD 25.000)
+  fue eliminada: la SEC aprobó el cambio a FINRA Rule 4210 el 14/04/2026, efectivo el 04/06/2026, con margen
+  intradía proporcional a la exposición (verificado el 02/10/2026; confirmar la implementación de Alpaca).
 - **Credenciales:** `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY` en `.env`. Nunca en YAML, DB, logs o frontend.
 
 ## 7. `IBKRBrokerAdapter` / `IBKRMarketDataAdapter` — diseño (Fase 8)
