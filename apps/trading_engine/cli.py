@@ -12,7 +12,7 @@ import json
 import sys
 import tempfile
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TextIO
@@ -27,6 +27,7 @@ from apps.trading_engine.bootstrap import (
     run_simulation,
 )
 from apps.trading_engine.experiment import JobResult, run_experiment
+from apps.trading_engine.progress import ProgressBoard
 from packages.common.clock import SystemClock
 from packages.common.config import AppConfig, load_config
 from packages.common.enums import TradingMode
@@ -40,6 +41,7 @@ from packages.jev.registry import available_models
 from packages.jev.typesafe import SdkJevClient, TypeSafeJEVModel
 from packages.market_data.alpaca_history import AlpacaHistoricalClient, credentials
 from packages.market_data.dataset import DatasetStore
+from packages.market_data.spreads import DEFAULT_TIMES, calibrate_spreads, load_spreads, write_spreads
 from packages.market_data.synthetic import SyntheticMarket
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository
@@ -123,6 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
     info = data_sub.add_parser("info", help="show a dataset manifest summary")
     info.add_argument("name")
     info.add_argument("--verify", action="store_true", help="recompute file hashes")
+    spreads = data_sub.add_parser(
+        "spreads", help="measure typical bid/ask spreads per symbol from SIP quotes"
+    )
+    spreads.add_argument("name")
+    spreads.add_argument(
+        "--days", type=int, default=15, help="sessions sampled, evenly over the dataset range"
+    )
+    spreads.add_argument(
+        "--times",
+        default=",".join(t.strftime("%H:%M") for t in DEFAULT_TIMES),
+        help="exchange-local times sampled each day (HH:MM, comma separated)",
+    )
 
     exp = sub.add_parser("experiment", help="compare models on a dataset, fold by fold (phase 3)")
     exp.add_argument("--dataset", required=True)
@@ -197,6 +211,9 @@ async def cmd_simulate(args: argparse.Namespace, out: Console) -> int:
     )
     if not args.json:
         out.line(mode_banner(TradingMode.BACKTEST, config.broker.active, config.market_data.provider))
+        calendar = dataset.calendar(config.trading.exchange_timezone) if dataset else build_calendar(config)
+        board = ProgressBoard(total_sessions=len(list(calendar.sessions_between(start, end))), write=out.line)
+        options.on_session = lambda day: board.session_done()
     report = await run_simulation(config, options)
     if args.json:
         out.json(report_payload(report, config))
@@ -470,9 +487,44 @@ async def cmd_data(args: argparse.Namespace, out: Console) -> int:
         )
         early = [d["date"] for d in m["calendar"] if d["close"] != "16:00"]
         out.line(f"early close {', '.join(early) or 'none'}")
+        measured = load_spreads(ds)
+        if measured is None:
+            out.line("spreads     not measured (data spreads NAME): costs use costs.default_spread_bps")
+        else:
+            out.line(
+                f"spreads     measured {measured['created_at'][:10]} (calibration {measured['calibration_version']}):"
+            )
+            for symbol, stats in measured["symbols"].items():
+                out.line(
+                    f"            {symbol:<6} median {stats['median_bps']:6.2f} bps  p75 {stats['p75_bps']:6.2f}  "
+                    f"p90 {stats['p90_bps']:6.2f}  ({stats['samples']} samples)"
+                )
         if args.verify:
             ds.verify()
             out.line("files       OK (hashes match the manifest)")
+        return EXIT_OK
+    if args.data_command == "spreads":
+        ds = store.load(args.name)
+        times = [time.fromisoformat(t.strip()) for t in args.times.split(",") if t.strip()]
+        key, secret = credentials()
+        out.line(f"sampling quotes: {args.days} sessions x {len(times)} times x {len(ds.symbols)} symbols")
+        with AlpacaHistoricalClient(config.market_data.alpaca, key=key, secret=secret) as client:
+            payload = await asyncio.to_thread(
+                calibrate_spreads,
+                client,
+                ds,
+                days=args.days,
+                times=times,
+                timezone=config.trading.exchange_timezone,
+                progress=lambda symbol, n: out.line(f"  {symbol:<6} {n} samples"),
+            )
+            requests = client.requests
+        write_spreads(ds, payload)
+        out.line(
+            f"spreads saved for {ds.name} (calibration {payload['calibration_version']}, {requests} requests)"
+        )
+        for symbol, stats in payload["symbols"].items():
+            out.line(f"  {symbol:<6} median {stats['median_bps']:6.2f} bps  p90 {stats['p90_bps']:6.2f} bps")
         return EXIT_OK
     cfg = config.market_data.alpaca
     symbols = _symbols(args.symbols) or list(config.trading.symbols)
@@ -518,6 +570,14 @@ def print_experiment(out: Console, payload: dict[str, Any]) -> None:
         f"range             {rng['start']}..{rng['end']}  {rng['sessions']} sessions, {len(payload['folds'])} monthly folds"
     )
     out.line(f"symbols           {', '.join(payload['symbols'])}")
+    costs = payload.get("costs", {})
+    if costs:
+        spread = (
+            f"measured per symbol (calibration {costs['spread_calibration']})"
+            if costs.get("spread_calibration")
+            else f"assumed {costs['default_spread_bps']} bps for every symbol"
+        )
+        out.line(f"costs             spread {spread}; slippage {costs['slippage_bps']} bps per side")
     out.line("")
     header = f"{'model':<16} {'trades':>7} {'net pnl':>12} {'model pnl':>11} {'exec cost':>10} {'win':>6} {'PF':>5} {'mean/day':>9}  {'95% CI mean/day':<22} {'+folds':>6}"
     out.line(header)
@@ -589,6 +649,7 @@ async def cmd_experiment(args: argparse.Namespace, out: Console) -> int:
         start=args.start,
         end=args.end,
         progress=None if args.json else progress,
+        report=None if args.json else out.line,
     )
     if args.json:
         out.json(result.payload)

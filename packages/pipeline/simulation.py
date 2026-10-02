@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from packages.brokers.mock import MockBrokerAdapter
 from packages.common.clock import SimulatedClock
@@ -53,6 +53,7 @@ class SimulationRunner:
         timeframe: Timeframe,
         pace_seconds: float = 0.0,
         max_events: int | None = None,
+        on_session: Callable[[date], None] | None = None,
     ) -> None:
         self._engine = engine
         self._market = market_data
@@ -62,6 +63,8 @@ class SimulationRunner:
         self._timeframe = timeframe
         self._pace = pace_seconds
         self._max_events = max_events
+        self._on_session = on_session
+        self._session: date | None = None
 
     async def run(self, *, finalize: bool = True) -> SimulationResult:
         """Process the whole feed. With `max_events` the run stops early WITHOUT finalizing (simulated crash)."""
@@ -106,6 +109,11 @@ class SimulationRunner:
 
     async def _process(self, timestamp: datetime, events: list[MarketEvent]) -> None:
         engine, broker = self._engine, self._broker
+        day = timestamp.date()  # regular sessions never cross midnight UTC
+        if day != self._session:
+            self._session = day
+            if self._on_session is not None:
+                self._on_session(day)
         if timestamp > self._clock.now():
             self._clock.advance_to(timestamp)
         bars = [e for e in events if isinstance(e, MarketBar)]

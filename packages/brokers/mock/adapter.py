@@ -533,7 +533,9 @@ class MockBrokerAdapter(BrokerAdapter):
 
     def _marketable_price(self, side: Side, reference: float, symbol: str) -> float:
         quote = self._last_quote.get(symbol)
-        raw = self._costs.execution_price(side, reference, quote.spread_bps if quote is not None else None)
+        raw = self._costs.execution_price(
+            side, reference, quote.spread_bps if quote is not None else None, symbol
+        )
         return round_to_tick(raw, TICK, "up" if side is Side.BUY else "down")
 
     @staticmethod

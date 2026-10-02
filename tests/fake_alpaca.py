@@ -20,6 +20,9 @@ EARLY_CLOSE = date(2024, 7, 3)  # 13:00 close
 INDEPENDENCE_DAY = date(2024, 7, 4)
 
 
+QUOTED_SPREAD_BPS = {"SPY": 0.4, "AAPL": 1.2}  # what the fake market quotes; calibration must recover it
+
+
 class FakeAlpaca:
     def __init__(
         self, *, page_size: int = 500, holidays: tuple[date, ...] = (HOLIDAY, INDEPENDENCE_DAY)
@@ -93,4 +96,27 @@ class FakeAlpaca:
             page = rows[offset : offset + self.page_size]
             next_token = str(offset + self.page_size) if offset + self.page_size < len(rows) else None
             return httpx.Response(200, json={"bars": {symbol: page}, "next_page_token": next_token})
+        if request.url.path == "/v2/stocks/quotes":
+            symbol = params["symbols"]
+            start = datetime.fromisoformat(params["start"].replace("Z", "+00:00"))
+            spread = QUOTED_SPREAD_BPS.get(symbol, 2.0) / 1e4
+            mid = 100.0
+            quotes = []
+            for i in range(int(params.get("limit", "200")) // 10):
+                at = (start + timedelta(milliseconds=100 * i)).isoformat().replace("+00:00", "Z")
+                bid, ask = mid * (1 - spread / 2), mid * (1 + spread / 2)
+                if i % 7 == 3:
+                    bid, ask = ask, bid  # crossed quote: must be ignored
+                quotes.append(
+                    {
+                        "t": at,
+                        "bp": round(bid, 6),
+                        "ap": round(ask, 6),
+                        "bs": 3,
+                        "as": 4,
+                        "bx": "V",
+                        "ax": "Q",
+                    }
+                )
+            return httpx.Response(200, json={"quotes": {symbol: quotes}, "next_page_token": None})
         return httpx.Response(404, text="not found")

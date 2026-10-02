@@ -203,3 +203,47 @@ async def test_order_store_cache_is_write_through_and_scoped(tmp_path: Path) -> 
     await restarted.save(order("a-1", OrderStatus.FILLED))
     assert await restarted.list_open() == []
     await database.dispose()
+
+
+# ---------------------------------------------------------------- measured spreads in the cost model, progress
+
+
+def test_cost_model_prefers_live_quote_then_symbol_then_default() -> None:
+    from packages.common.config import CostsSection
+    from packages.common.costs import CostModel
+
+    model = CostModel(CostsSection(default_spread_bps=2.0, spread_by_symbol={"SPY": 0.4}))
+    assert model.spread_bps(1.5, "SPY") == 1.5  # a live quote always wins
+    assert model.spread_bps(None, "SPY") == 0.4
+    assert model.spread_bps(None, "XOM") == 2.0
+    assert model.spread_bps(None) == 2.0
+    cheap = model.estimate_round_trip(
+        price=100, quote_spread_bps=None, volatility_per_bar=0.001, bar_seconds=60, symbol="SPY"
+    )
+    dear = model.estimate_round_trip(
+        price=100, quote_spread_bps=None, volatility_per_bar=0.001, bar_seconds=60, symbol="XOM"
+    )
+    assert dear.total_bps - cheap.total_bps == pytest.approx(1.6)
+    assert model.execution_price(Side.BUY, 100.0, None, "SPY") < model.execution_price(
+        Side.BUY, 100.0, None, "XOM"
+    )
+
+
+def test_progress_board_throttles_and_estimates() -> None:
+    from apps.trading_engine.progress import ProgressBoard
+
+    now = [0.0]
+    lines: list[str] = []
+    board = ProgressBoard(
+        total_sessions=100, total_jobs=4, write=lines.append, interval=30, clock=lambda: now[0]
+    )
+    for _ in range(10):
+        now[0] += 1
+        board.session_done()
+    assert lines == []  # nothing printed before the interval
+    board.job_done()
+    now[0] = 40
+    board.session_done(10)
+    assert len(lines) == 1
+    assert "20.0%" in lines[0] and "sessions 20/100" in lines[0] and "jobs 1/4" in lines[0]
+    assert "ETA ~2m40s" in lines[0]  # 40 s for 20 sessions -> 160 s for the remaining 80

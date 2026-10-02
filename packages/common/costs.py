@@ -35,14 +35,19 @@ class CostModel:
             regulatory += taf
         return commission + regulatory
 
-    def spread_bps(self, quote_spread_bps: float | None) -> float:
+    def spread_bps(self, quote_spread_bps: float | None, symbol: str | None = None) -> float:
+        """Live quote spread when known; otherwise the symbol's typical spread; otherwise the default."""
         if quote_spread_bps is None or not math.isfinite(quote_spread_bps):
+            if symbol is not None and symbol in self.config.spread_by_symbol:
+                return self.config.spread_by_symbol[symbol]
             return self.config.default_spread_bps
         return max(0.0, quote_spread_bps)
 
-    def execution_price(self, side: Side, reference: float, quote_spread_bps: float | None) -> float:
+    def execution_price(
+        self, side: Side, reference: float, quote_spread_bps: float | None, symbol: str | None = None
+    ) -> float:
         """Adverse execution price for a marketable order: half spread plus slippage (not tick-rounded)."""
-        adverse_bps = self.spread_bps(quote_spread_bps) / 2.0 + self.config.slippage_bps
+        adverse_bps = self.spread_bps(quote_spread_bps, symbol) / 2.0 + self.config.slippage_bps
         return reference * (1.0 + side.sign * adverse_bps / 1e4)
 
     def estimate_round_trip(
@@ -52,6 +57,7 @@ class CostModel:
         quote_spread_bps: float | None,
         volatility_per_bar: float,
         bar_seconds: float,
+        symbol: str | None = None,
     ) -> CostEstimate:
         cfg = self.config
         commission_bps = (
@@ -62,7 +68,7 @@ class CostModel:
         latency_fraction = math.sqrt((cfg.latency_ms / 1000.0) / bar_seconds) if bar_seconds > 0 else 0.0
         latency_bps = 2.0 * cfg.latency_cost_factor * vol * 1e4 * latency_fraction
         return CostEstimate.of(
-            spread_bps=self.spread_bps(quote_spread_bps),
+            spread_bps=self.spread_bps(quote_spread_bps, symbol),
             slippage_bps=2.0 * cfg.slippage_bps,
             commission_bps=commission_bps,
             regulatory_bps=regulatory_bps,

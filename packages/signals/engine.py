@@ -51,6 +51,7 @@ class SignalEngine:
             quote_spread_bps=quote.spread_bps if quote is not None else None,
             volatility_per_bar=volatility_per_bar,
             bar_seconds=self._bar_seconds,
+            symbol=prediction.symbol,
         )
         gross = prediction.direction.sign * prediction.expected_return * 1e4
         net = gross - costs.total_bps

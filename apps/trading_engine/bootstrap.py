@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -45,6 +45,7 @@ from packages.market_data.dataset import Dataset, DatasetStore
 from packages.market_data.engine import MarketDataEngine
 from packages.market_data.historical import HistoricalMarketDataAdapter
 from packages.market_data.mock import MockMarketDataAdapter
+from packages.market_data.spreads import load_spreads, typical_spreads
 from packages.persistence.database import Database
 from packages.persistence.recorder import AuditRecorder
 from packages.persistence.repositories import AuditRepository, SqlOrderStore
@@ -166,6 +167,7 @@ class SimulationOptions:
     pace_seconds: float = 0.0
     broker: MockBrokerAdapter | None = None  # reuse a simulated exchange (restart tests)
     git_commit: str | None = None
+    on_session: Callable[[date], None] | None = None  # progress: called when a new session starts
 
 
 @dataclass
@@ -221,6 +223,19 @@ def load_dataset(config: AppConfig) -> Dataset | None:
     return dataset
 
 
+def with_measured_spreads(config: AppConfig, dataset: Dataset) -> AppConfig:
+    """Typical spreads measured for the dataset (`data spreads`), unless disabled; explicit values win.
+    The result is part of the configuration recorded with the run, so `verify` uses the same costs."""
+    if not config.costs.use_measured_spreads:
+        return config
+    payload = load_spreads(dataset)
+    if payload is None:
+        return config
+    merged = {**typical_spreads(payload), **config.costs.spread_by_symbol}
+    costs = config.costs.model_copy(update={"spread_by_symbol": merged})
+    return config.model_copy(update={"costs": costs})
+
+
 async def build_simulation(config: AppConfig, options: SimulationOptions) -> EngineContext:
     mode = TradingMode.BACKTEST
     enforce_mode_gate(mode, config.broker.mode)
@@ -230,6 +245,8 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         raise ConfigError("end date must not be before start date")
     trading = config.trading
     dataset = load_dataset(config)
+    if dataset is not None:
+        config = with_measured_spreads(config, dataset)
     calendar = dataset.calendar(trading.exchange_timezone) if dataset is not None else build_calendar(config)
     first = next(calendar.sessions_between(options.start, options.end), None)
     if first is None:
@@ -347,6 +364,7 @@ async def build_simulation(config: AppConfig, options: SimulationOptions) -> Eng
         timeframe=trading.timeframe,
         pace_seconds=options.pace_seconds,
         max_events=options.max_events,
+        on_session=options.on_session,
     )
     return EngineContext(
         config=config,
@@ -392,9 +410,9 @@ async def run_simulation(
     status = "FAILED"
     try:
         await repo.register_model_version(ctx.model.metadata, created_at=ctx.clock.now())
-        await repo.save_run(run, config, ctx.model.metadata)
+        await repo.save_run(run, ctx.config, ctx.model.metadata)
         await repo.save_backtest_run(
-            run, config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
+            run, ctx.config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
             metrics=None, finished_at=None, status="RUNNING", dataset_version=dataset_version,
         )  # fmt: skip
         await ctx.engine.start()
@@ -406,7 +424,7 @@ async def run_simulation(
         if result.completed:
             await ctx.engine.stop()
         await repo.save_backtest_run(
-            run, config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
+            run, ctx.config, ctx.model.metadata, start=window_start, end=window_end, symbols=symbols,
             metrics=metrics, finished_at=ctx.clock.now(), status=status, dataset_version=dataset_version,
         )  # fmt: skip
         await repo.finish_run(stopped_at=ctx.clock.now(), status=status, summary=_jsonable_summary(summary))

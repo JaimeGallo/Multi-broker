@@ -15,7 +15,15 @@ from packages.common.errors import ConfigError, DataError
 from packages.market_data.alpaca_history import AlpacaHistoricalClient, credentials
 from packages.market_data.dataset import DatasetStore, dataset_version
 from packages.market_data.historical import HistoricalMarketDataAdapter
-from tests.fake_alpaca import EARLY_CLOSE, HOLIDAY, INDEPENDENCE_DAY, FakeAlpaca
+from packages.market_data.spreads import (
+    DEFAULT_TIMES,
+    calibrate_spreads,
+    load_spreads,
+    sample_days,
+    typical_spreads,
+    write_spreads,
+)
+from tests.fake_alpaca import EARLY_CLOSE, HOLIDAY, INDEPENDENCE_DAY, QUOTED_SPREAD_BPS, FakeAlpaca
 
 CFG = AlpacaDataSection(min_request_interval_seconds=0)
 
@@ -143,3 +151,33 @@ async def test_historical_adapter_streams_in_time_order(downloaded) -> None:  # 
         "SPY", datetime(2024, 3, 26, 14, 0, tzinfo=UTC), datetime(2024, 3, 26, 14, 5, tzinfo=UTC)
     )
     assert len(window) == 5
+
+
+def test_spread_calibration_recovers_the_quoted_spreads(downloaded) -> None:  # type: ignore[no-untyped-def]
+    store, ds = downloaded
+    fake = FakeAlpaca()
+    with client(fake) as c:
+        payload = calibrate_spreads(c, ds, days=3)
+    write_spreads(ds, payload)
+    assert load_spreads(store.load("test")) == payload
+    spy, aapl = payload["symbols"]["SPY"], payload["symbols"]["AAPL"]
+    assert spy["median_bps"] == pytest.approx(QUOTED_SPREAD_BPS["SPY"], rel=0.02)
+    assert aapl["median_bps"] == pytest.approx(QUOTED_SPREAD_BPS["AAPL"], rel=0.02)
+    assert spy["samples"] == 3 * len(DEFAULT_TIMES)  # every sampled moment lies inside the session
+    first = fake.requests[0].url.params
+    assert first["feed"] == "sip" and first["symbols"] in ("SPY", "AAPL")
+    assert typical_spreads(payload) == {"AAPL": aapl["median_bps"], "SPY": spy["median_bps"]}
+    assert sample_days([date(2024, 1, d) for d in range(2, 12)], 3) == [
+        date(2024, 1, 2),
+        date(2024, 1, 6),
+        date(2024, 1, 11),
+    ]
+
+
+def test_spreads_measured_for_another_dataset_version_are_refused(downloaded) -> None:  # type: ignore[no-untyped-def]
+    _, ds = downloaded
+    with client(FakeAlpaca()) as c:
+        payload = calibrate_spreads(c, ds, days=1, symbols=["SPY"])
+    write_spreads(ds, {**payload, "dataset_version": "something-else"})
+    with pytest.raises(DataError, match="recalibrate"):
+        load_spreads(ds)

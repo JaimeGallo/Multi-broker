@@ -182,6 +182,10 @@ class CostsSection(Section):
     taf_max_per_trade: float = Field(default=0.0, ge=0)
     latency_ms: float = Field(default=250.0, ge=0)
     latency_cost_factor: float = Field(default=0.5, ge=0)
+    # Typical quoted spread per symbol (bps), used when no live quote is available. Filled automatically from a
+    # dataset's measured spreads (`data spreads`) unless use_measured_spreads is false; explicit values win.
+    spread_by_symbol: dict[str, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
+    use_measured_spreads: bool = True
 
 
 class SizingSection(Section):

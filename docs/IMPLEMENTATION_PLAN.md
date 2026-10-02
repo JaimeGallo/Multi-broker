@@ -75,11 +75,15 @@ Hecho:
   largo/corto, por fold y símbolo, comparación pareada contra un modelo de referencia; `results.json` y tabla
   `experiments`.
 - `walk_forward` con embargo (utilidad lista para los modelos entrenados).
+- Spreads medidos (`data spreads`): mediana del spread SIP por símbolo muestreada en días repartidos del rango;
+  el motor la usa en el Signal Engine y en los fills simulados, y queda en la configuración de cada run.
+- Progreso en `simulate` y `experiment` (también desde los procesos paralelos).
 - Rendimiento: backtests ~2,3 veces más rápidos y lineales en la duración (índices de órdenes abiertas, caché
   write-through del store, escrituras de auditoría en una transacción).
 
 Pendiente: modelos entrenados (regresión logística, random forest, gradient boosting, JEV v1) con walk-forward y
-tests anti-leakage; universo dinámico por volumen; spreads reales (quotes); SSR y coste de préstamo; Buy & Hold.
+tests anti-leakage; universo dinámico por volumen; calibración del slippage con fills reales (Fase 4); SSR y
+coste de préstamo; Buy & Hold.
 
 Candidato ya preparado: el adaptador `typesafe-jev` (TypeSafe Jev, desactivado por defecto; ver
 [JEV_TYPESAFE.md](JEV_TYPESAFE.md)). Entra en la Fase 3 como un modelo más a validar contra los baselines, no como

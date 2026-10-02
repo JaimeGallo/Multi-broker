@@ -17,6 +17,7 @@ from packages.common.config import AlpacaDataSection
 from packages.common.enums import TradingMode
 from packages.market_data.alpaca_history import AlpacaHistoricalClient
 from packages.market_data.dataset import DatasetStore
+from packages.market_data.spreads import calibrate_spreads, write_spreads
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository
 from packages.pipeline.replay import DecisionVerifier
@@ -151,3 +152,52 @@ def test_cli_data_commands(dataset_root: Path, tmp_path: Path, monkeypatch: pyte
     assert code == cli.EXIT_CONFIG and "already exists" in text
     code, text = run("simulate", "--dataset", "cli-test", "--symbols", "SPY", "--model", "baseline-flat")
     assert code == 0 and "dataset           cli-test" in text and "2024-04-02" in text
+
+
+async def test_measured_spreads_flow_into_costs_runs_and_verify(dataset_root: Path, tmp_path: Path) -> None:
+    store = DatasetStore(dataset_root)
+    dataset = store.load("sip-test")
+    cfg = AlpacaDataSection(min_request_interval_seconds=0)
+    with AlpacaHistoricalClient(
+        cfg, key="test-key", secret="s", transport=FakeAlpaca().transport()
+    ) as client:
+        write_spreads(dataset, calibrate_spreads(client, dataset, days=2))
+    try:
+        db = tmp_path / "spreads.db"
+        config = historical_config(dataset_root, symbols=["SPY"])
+        report = await run_simulation(
+            config,
+            SimulationOptions(start=date(2024, 4, 1), end=date(2024, 4, 2), run_id="run_spreads",
+                              database_url=sqlite_url(db), git_commit="t"),
+        )  # fmt: skip
+        assert report.performance.trades > 0
+        # a measured SPY spread of ~0.4 bps instead of the 2 bps default: entries pay ~0.8 bps less
+        assert report.performance.avg_entry_slippage_bps is not None
+        assert report.performance.avg_entry_slippage_bps < 2.0 / 2 + config.costs.slippage_bps
+        database = Database(sqlite_url(db))
+        try:
+            repo = AuditRepository(database, run_id="v", mode=TradingMode.BACKTEST)
+            trace = await repo.decision_trace(
+                (await repo.list_signals(limit=1, run_id="run_spreads"))[0]["signal_id"]
+            )
+            assert trace is not None and trace["run"]["config"]["costs"]["spread_by_symbol"][
+                "SPY"
+            ] == pytest.approx(0.4, rel=0.02)
+            verifier = DecisionVerifier(repo)
+            signals = await repo.list_signals(limit=40, run_id="run_spreads")
+            assert all([(await verifier.verify_decision(s["signal_id"])).ok for s in signals])
+        finally:
+            await database.dispose()
+        lines: list[str] = []
+        result = await run_experiment(
+            historical_config(dataset_root, symbols=["SPY"], db=tmp_path / "m.db"),
+            models=["baseline-flat"], workers=2, output_root=tmp_path / "exp", report=lines.append, report_interval=0,
+        )  # fmt: skip
+        costs = result.payload["costs"]
+        assert costs["spread_calibration"] and costs["spread_by_symbol"]["SPY"] == pytest.approx(
+            0.4, rel=0.02
+        )
+        assert {j["status"] for j in result.payload["jobs"]} == {"COMPLETED"}  # ran in 2 spawned processes
+        assert lines and "sessions 9/9" in lines[-1] and "jobs 2/2" in lines[-1]
+    finally:
+        (dataset.path / "spreads.json").unlink()

@@ -15,14 +15,21 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from multiprocessing import get_context
 from pathlib import Path
+from queue import Empty
 from typing import Any
 
-from apps.trading_engine.bootstrap import SimulationOptions, load_dataset, run_simulation
+from apps.trading_engine.bootstrap import (
+    SimulationOptions,
+    load_dataset,
+    run_simulation,
+    with_measured_spreads,
+)
+from apps.trading_engine.progress import ProgressBoard
 from packages.analytics.evaluation import daily_pnl, model_summary, paired_difference
 from packages.backtesting.splits import Fold, monthly_folds
 from packages.common.config import PROJECT_ROOT, AppConfig, config_hash, load_config
@@ -33,6 +40,7 @@ from packages.common.ids import new_id
 from packages.common.logging import configure_logging
 from packages.common.run import detect_git_commit
 from packages.jev.registry import available_models
+from packages.market_data.spreads import load_spreads
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository, sanitized_config
 
@@ -49,6 +57,7 @@ class Job:
     database_url: str
     git_commit: str | None
     in_worker_process: bool = False
+    progress_queue: Any = None  # multiprocessing queue: one item per simulated session
 
 
 @dataclass
@@ -93,6 +102,7 @@ def run_job(job: Job) -> JobResult:
         run_id=job.run_id,
         database_url=job.database_url,
         git_commit=job.git_commit,
+        on_session=(lambda day: job.progress_queue.put(1)) if job.progress_queue is not None else None,
     )
     try:
         report = asyncio.run(run_simulation(config, options))
@@ -109,6 +119,29 @@ def run_job(job: Job) -> JobResult:
         counters=report.summary["counters"],
         usage=report.extra.get("jev_usage", {}),
     )
+
+
+class _InlineQueue:
+    """Same interface as a multiprocessing queue, for jobs run in this process."""
+
+    def __init__(self, board: ProgressBoard) -> None:
+        self._board = board
+
+    def put(self, item: int) -> None:
+        self._board.session_done(item)
+
+
+def _drain(queue: Any, board: ProgressBoard | None) -> None:
+    if queue is None or board is None:
+        return
+    count = 0
+    while True:
+        try:
+            count += queue.get_nowait()
+        except Empty:
+            break
+    if count:
+        board.session_done(count)
 
 
 @dataclass
@@ -129,6 +162,8 @@ async def run_experiment(
     experiment_id: str | None = None,
     output_root: str | Path = "data/experiments",
     progress: Callable[[JobResult, int, int], None] | None = None,
+    report: Callable[[str], None] | None = None,
+    report_interval: float = 30.0,
 ) -> ExperimentResult:
     unknown = sorted(set(models) - set(available_models()))
     if unknown:
@@ -141,6 +176,7 @@ async def run_experiment(
     dataset = load_dataset(base)
     if dataset is None:
         raise ConfigError("experiments run on a downloaded dataset (--dataset NAME)")
+    measured = load_spreads(dataset)
     calendar = dataset.calendar(base.trading.exchange_timezone)
     first, last = start or dataset.start, end or dataset.end
     sessions = [s.day for s in calendar.sessions_between(first, last)]
@@ -165,24 +201,49 @@ async def run_experiment(
         for fold in folds
     ]
     results: list[JobResult] = []
+    board = (
+        ProgressBoard(
+            total_sessions=sum(job.fold.sessions for job in jobs),
+            total_jobs=len(jobs),
+            write=report,
+            interval=report_interval,
+        )
+        if report is not None
+        else None
+    )
+
+    def finished(result: JobResult) -> None:
+        results.append(result)
+        if board is not None:
+            board.job_done()
+        if progress is not None:
+            progress(result, len(results), len(jobs))
+
     if workers <= 1:
         for job in jobs:
-            result = await asyncio.to_thread(run_job, job)
-            results.append(result)
-            if progress is not None:
-                progress(result, len(results), len(jobs))
+            if board is not None:
+                job.progress_queue = _InlineQueue(board)
+            finished(await asyncio.to_thread(run_job, job))
     else:
         for job in jobs:
             job.in_worker_process = True
 
         def run_pool() -> None:
-            with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
-                futures = [pool.submit(run_job, job) for job in jobs]
-                for future in as_completed(futures):
-                    result = future.result()
-                    results.append(result)
-                    if progress is not None:
-                        progress(result, len(results), len(jobs))
+            context = get_context("spawn")
+            with (
+                context.Manager() as manager,
+                ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool,
+            ):
+                queue = manager.Queue() if board is not None else None
+                for job in jobs:
+                    job.progress_queue = queue
+                pending = {pool.submit(run_job, job) for job in jobs}
+                while pending:
+                    done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                    _drain(queue, board)
+                    for future in done:
+                        finished(future.result())
+                _drain(queue, board)
 
         await asyncio.to_thread(run_pool)
 
@@ -226,6 +287,14 @@ async def run_experiment(
         "reference": reference,
         "symbols": list(base.trading.symbols),
         "config_hash": config_hash(base),
+        "costs": {
+            "default_spread_bps": base.costs.default_spread_bps,
+            "slippage_bps": base.costs.slippage_bps,
+            "spread_calibration": (measured or {}).get("calibration_version")
+            if base.costs.use_measured_spreads
+            else None,
+            "spread_by_symbol": with_measured_spreads(base, dataset).costs.spread_by_symbol,
+        },
         "git_commit": git_commit,
         "jobs": [
             {
@@ -242,7 +311,7 @@ async def run_experiment(
         "comparisons": comparisons,
         "caveats": [
             "Fixed symbol lists of today's large caps carry survivorship bias.",
-            "Datasets hold bars only: spreads use costs.default_spread_bps.",
+            "Spreads are typical values (measured medians or the default), not the quote at each trade.",
             "Confidence intervals come from a bootstrap of daily PnL; an interval including 0 is not an edge.",
         ],
     }

@@ -70,6 +70,10 @@ basta para el histórico SIP.
 python -m apps.trading_engine --config config/profiles/phase3.yaml data download --name sip-2024 --start 2024-01-02 --end 2024-12-31
 python -m apps.trading_engine data info sip-2024 --verify
 
+# 1b. Medir el spread típico de cada símbolo con cotizaciones SIP reales (~900 peticiones, ~5 min).
+#     A partir de ahí los backtests de ese dataset usan spreads medidos en lugar del supuesto fijo.
+python -m apps.trading_engine --config config/profiles/phase3.yaml data spreads sip-2024
+
 # 2. Un backtest sobre datos reales (mismo motor, auditoría y verify que en simulación)
 python -m apps.trading_engine --config config/profiles/phase3.yaml simulate --dataset sip-2024 --start 2024-01-02 --end 2024-01-31
 
@@ -79,7 +83,7 @@ python -m apps.trading_engine --config config/profiles/phase3.yaml experiment --
 ```
 
 Duración orientativa: ~2 s por símbolo y día con un modelo que opera mucho, dividido entre los procesos.
-Empieza con un mes (`--start/--end`) antes de lanzar el año completo.
+`simulate` y `experiment` muestran cada 30 s el avance (sesiones, trabajos, tiempo y estimación restante).
 
 ## JEV con TypeSafe (opcional, desactivado)
 

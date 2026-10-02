@@ -2,7 +2,8 @@
 
 Only official, documented endpoints are used:
 - `GET {data_url}/v2/stocks/bars`   bars for many symbols, paginated with `next_page_token`;
-- `GET {trading_url}/v2/calendar`   trading days with open/close times (holidays and early closes).
+- `GET {trading_url}/v2/calendar`   trading days with open/close times (holidays and early closes);
+- `GET {data_url}/v2/stocks/quotes` bid/ask quotes (sampled to measure typical spreads).
 
 Keys come from the environment (`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`), never from configuration. The calendar
 is read from the PAPER trading API. On the free (Basic) plan SIP data of the last 15 minutes is not available, so
@@ -16,7 +17,7 @@ import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -82,6 +83,13 @@ class AlpacaHistoricalClient:
             timeout=timeout,
         )
         self.requests = 0
+
+    @property
+    def config(self) -> AlpacaDataSection:
+        return self._cfg
+
+    def get_json(self, url: str, params: Mapping[str, Any]) -> Any:
+        return self._get(url, params)
 
     def close(self) -> None:
         self._client.close()
@@ -161,3 +169,37 @@ class AlpacaHistoricalClient:
             if not token:
                 return
             params["page_token"] = token
+
+
+@dataclass(frozen=True)
+class RawQuote:
+    t: str
+    bid: float
+    ask: float
+
+
+def _rfc3339(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _quotes_page(payload: Mapping[str, Any], symbol: str) -> list[RawQuote]:
+    rows = (payload.get("quotes") or {}).get(symbol) or []
+    return [RawQuote(row["t"], float(row["bp"]), float(row["ap"])) for row in rows]
+
+
+def fetch_quotes(
+    client: AlpacaHistoricalClient, symbol: str, start: datetime, end: datetime, limit: int = 200
+) -> list[RawQuote]:
+    """First page of SIP quotes in [start, end): enough to sample the prevailing spread at one moment."""
+    payload = client.get_json(
+        f"{client.config.data_url}/v2/stocks/quotes",
+        {
+            "symbols": symbol,
+            "start": _rfc3339(start),
+            "end": _rfc3339(end),
+            "feed": client.config.feed,
+            "limit": limit,
+            "sort": "asc",
+        },
+    )
+    return _quotes_page(payload, symbol)
