@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - run: python -m pip install --upgrade pip && pip install -e ".[dev,typesafe]"
       - run: mypy
 
   tests:
@@ -50,7 +50,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      # the typesafe extra lets the adapter test check the official SDK wire format (no network calls)
+      - run: python -m pip install --upgrade pip && pip install -e ".[dev,typesafe]"
       - run: pytest
 
   docker:
@@ -74,5 +75,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip setuptools && pip install -e ".[dev,postgres]" pip-audit
+      - run: python -m pip install --upgrade pip setuptools && pip install -e ".[dev,postgres,typesafe]" pip-audit
       - run: pip-audit --skip-editable

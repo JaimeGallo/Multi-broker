@@ -59,6 +59,18 @@ Opciones útiles de `simulate`: `--symbols MOCKA,MOCKB`, `--model baseline-rando
 `--max-events N` (simula una caída), `--json`. Configuración: `config/default.yaml`, perfiles con `--config`,
 variables `JEV__SECCION__CLAVE` y `--db` / `DATABASE_URL`.
 
+## JEV con TypeSafe (opcional, desactivado)
+
+El adaptador `typesafe-jev` delega la decisión de dirección en el modelo Jev de TypeSafe AI. No se usa salvo que
+se elija su perfil; detalles, coste y limitaciones en [docs/JEV_TYPESAFE.md](docs/JEV_TYPESAFE.md).
+
+```bash
+pip install -e ".[typesafe]"            # SDK oficial
+# en .env: TYPESAFE_API_KEY=...          (consola: console.typesafe.ai)
+python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml jev-check
+python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml simulate --start 2024-03-04
+```
+
 ## Documentación
 
 - [Arquitectura](docs/ARCHITECTURE.md)
@@ -66,6 +78,7 @@ variables `JEV__SECCION__CLAVE` y `--db` / `DATABASE_URL`.
 - [Riesgo y kill switch](docs/RISK.md)
 - [Ejecución, idempotencia y recuperación](docs/EXECUTION.md)
 - [Plan de implementación](docs/IMPLEMENTATION_PLAN.md)
+- [JEV con TypeSafe Jev (adaptador opcional)](docs/JEV_TYPESAFE.md)
 
 ## Seguridad
 

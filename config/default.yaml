@@ -76,7 +76,7 @@ features:
   include_microstructure: true
 
 model:
-  name: jev-heuristic           # stand-in model (no validated edge) | baseline-random | baseline-flat
+  name: jev-heuristic           # stand-in model (no validated edge) | baseline-random | baseline-flat | typesafe-jev (remote, see config/profiles)
   version: "0.1.0"
   params: {}
 

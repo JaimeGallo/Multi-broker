@@ -37,6 +37,7 @@ from packages.features.engine import FeatureEngine
 from packages.features.spec import FeatureSpec
 from packages.jev.base import JEVModel
 from packages.jev.registry import build_model
+from packages.jev.typesafe import TypeSafeJEVModel
 from packages.market_data.aggregator import BarAggregator
 from packages.market_data.base import MarketDataAdapter
 from packages.market_data.engine import MarketDataEngine
@@ -385,6 +386,7 @@ async def run_simulation(
             summary=summary,
             performance=performance,
             broker_submissions=ctx.execution.broker_submissions,
+            extra=model_usage(ctx.model),
         )
     except BaseException:
         with contextlib.suppress(Exception):  # the original error matters more than this bookkeeping
@@ -392,6 +394,22 @@ async def run_simulation(
         raise
     finally:
         await ctx.database.dispose()
+
+
+def model_usage(model: JEVModel) -> dict[str, Any]:
+    """API usage and estimated cost of remote models (empty for local ones)."""
+    if not isinstance(model, TypeSafeJEVModel):
+        return {}
+    usage = model.usage
+    return {
+        "jev_usage": {
+            "api_model": model.params.api_model,
+            "api_calls": usage.api_calls,
+            "cache_hits": usage.cache_hits,
+            "input_tokens": usage.input_tokens,
+            "estimated_cost_usd": model.cost_usd,
+        }
+    }
 
 
 def _jsonable_summary(summary: dict[str, Any]) -> dict[str, Any]:

@@ -26,7 +26,7 @@ from packages.common.entities import MarketBar, MarketQuote
 from packages.common.enums import DataQualityStatus, NoTradeReason, SignalStatus, Timeframe
 from packages.features.engine import FeatureEngine
 from packages.features.spec import FeatureSpec
-from packages.jev.registry import build_model
+from packages.jev.registry import build_model, replay_params
 from packages.persistence.repositories import AuditRepository
 from packages.signals.engine import SignalEngine
 from packages.signals.regime import RegimeEngine
@@ -179,6 +179,12 @@ class DecisionVerifier:
         )
         if params is None:
             return result
+        configured = (
+            config.get("model", {}).get("params", {})
+            if config.get("model", {}).get("name") == prediction["model_name"]
+            else {}
+        )
+        params = replay_params(prediction["model_name"], params, configured)
         model = build_model(
             ModelSection(name=prediction["model_name"], version=prediction["model_version"], params=params),
             namespace=namespace,

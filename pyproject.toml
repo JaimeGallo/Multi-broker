@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.29"]
+typesafe = ["typesafe-sdk>=0.7,<0.8"]  # TypeSafe Jev adapter (disabled by default)
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.24",

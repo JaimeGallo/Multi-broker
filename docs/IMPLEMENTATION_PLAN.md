@@ -57,6 +57,10 @@ de la misma base de datos.
 
 ## Fase 3 — Backtesting y validación de JEV
 
+Candidato ya preparado: el adaptador `typesafe-jev` (TypeSafe Jev, desactivado por defecto; ver
+[JEV_TYPESAFE.md](JEV_TYPESAFE.md)). Entra en la Fase 3 como un modelo más a validar contra los baselines, no como
+modelo de producción asumido.
+
 1. **Datos históricos**: `HistoricalMarketDataAdapter` (Alpaca historical API → caché Parquet) con
    `dataset_version` = hash de (símbolos, rango, feed, ajustes). Registro de *corporate actions* y del universo
    usado en cada fecha para evitar **survivorship bias**.

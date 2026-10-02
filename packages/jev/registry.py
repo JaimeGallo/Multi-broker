@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from packages.common.config import ModelSection
 from packages.common.errors import ConfigError
 from packages.jev.base import JEVModel
 from packages.jev.baselines import FlatJEVModel, RandomJEVModel
 from packages.jev.heuristic import HeuristicJEVModel
+from packages.jev.typesafe import RUNTIME_KEYS as TYPESAFE_RUNTIME_KEYS
+from packages.jev.typesafe import TypeSafeJEVModel
 
 
 class _ModelFactory(Protocol):
@@ -28,6 +30,7 @@ MODEL_FACTORIES: dict[str, _ModelFactory] = {
     HeuristicJEVModel.NAME: HeuristicJEVModel,
     RandomJEVModel.NAME: RandomJEVModel,
     FlatJEVModel.NAME: FlatJEVModel,
+    TypeSafeJEVModel.NAME: TypeSafeJEVModel,  # remote, disabled unless selected explicitly
 }
 
 
@@ -49,3 +52,12 @@ def build_model(
         bar_minutes=bar_minutes,
         params=dict(config.params),
     )
+
+
+def replay_params(name: str, stored: dict[str, Any], configured: dict[str, Any]) -> dict[str, Any]:
+    """Parameters to rebuild a model for decision replay: the stored decision parameters plus, for remote
+    models, the run's runtime options and offline mode (replay never calls an external API)."""
+    if name == TypeSafeJEVModel.NAME:
+        runtime = {k: v for k, v in configured.items() if k in TYPESAFE_RUNTIME_KEYS}
+        return {**stored, **runtime, "offline": True}
+    return dict(stored)

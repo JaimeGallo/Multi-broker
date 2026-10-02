@@ -1,6 +1,6 @@
 """Command line interface: `python -m apps.trading_engine <command>`.
 
-Commands: simulate, trace, verify, kill-switch, run. Console output is plain ASCII; logs go to stderr.
+Commands: simulate, trace, verify, kill-switch, run, jev-check. Console output is plain ASCII; logs go to stderr.
 Exit codes: 0 ok, 1 verification failed / not found, 2 refused or not available, 3 configuration error.
 """
 
@@ -10,8 +10,11 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import date
+from pathlib import Path
+from time import perf_counter
 from typing import Any, TextIO
 
 from apps.trading_engine.bootstrap import (
@@ -19,6 +22,7 @@ from apps.trading_engine.bootstrap import (
     KILL_SWITCH_KEY,
     SimulationOptions,
     SimulationReport,
+    build_calendar,
     run_simulation,
 )
 from packages.common.clock import SystemClock
@@ -28,6 +32,10 @@ from packages.common.errors import ConfigError, LiveTradingNotAllowed, SafetyErr
 from packages.common.logging import configure_logging
 from packages.common.safety import enforce_mode_gate, mode_banner
 from packages.common.secrets import load_dotenv, redact_url, sensitive_values
+from packages.features.engine import FeatureEngine
+from packages.features.spec import FeatureSpec
+from packages.jev.typesafe import SdkJevClient, TypeSafeJEVModel
+from packages.market_data.synthetic import SyntheticMarket
 from packages.persistence.database import Database
 from packages.persistence.repositories import AuditRepository
 from packages.pipeline.replay import DecisionVerifier, VerificationResult
@@ -93,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
     kill.add_argument("--run-id", help="act on a backtest run's switch instead of the paper/shadow switch")
 
     sub.add_parser("run", help="paper trading against a real broker (phase 4)")
+
+    sub.add_parser(
+        "jev-check", help="test the TypeSafe Jev setup with one live call (use with the typesafe-jev profile)"
+    )
     return parser
 
 
@@ -150,6 +162,7 @@ def report_payload(report: SimulationReport, config: AppConfig) -> dict[str, Any
         "broker_submissions": report.broker_submissions,
         "summary": report.summary,
         "performance": report.performance.model_dump(mode="json"),
+        **report.extra,
     }
 
 
@@ -185,6 +198,12 @@ def print_report(out: Console, report: SimulationReport, config: AppConfig) -> N
         f"max drawdown      {_fmt(perf.max_drawdown)}  sharpe {_fmt(perf.sharpe, '{:.2f}')} (few days: not meaningful)"
     )
     out.line(f"open positions    {report.summary['open_positions'] or 'none'}")
+    usage = report.extra.get("jev_usage")
+    if usage:
+        out.line(
+            f"typesafe jev      {usage['api_model']}: {usage['api_calls']} API calls, {usage['cache_hits']} cached, "
+            f"{usage['input_tokens']} input tokens, ~USD {usage['estimated_cost_usd']:.4f}"
+        )
     if kill.get("engaged"):
         out.line(f"KILL SWITCH       ENGAGED: {kill['reason']} - {kill['detail']}")
     else:
@@ -317,12 +336,66 @@ async def cmd_run(args: argparse.Namespace, out: Console) -> int:
     return EXIT_REFUSED
 
 
+async def cmd_jev_check(args: argparse.Namespace, out: Console) -> int:
+    """One real API call on synthetic features: checks key, SDK, pinned model name, latency and cost."""
+    config = _config(args)
+    if config.model.name != TypeSafeJEVModel.NAME:
+        out.line("jev-check: select the model first: --config config/profiles/typesafe-jev.yaml")
+        return EXIT_REFUSED
+    with tempfile.TemporaryDirectory() as scratch:
+        params = {**config.model.params, "offline": False, "cache_path": str(Path(scratch) / "check.jsonl")}
+        spec = FeatureSpec.from_config(config.features)
+        calendar = build_calendar(config)
+        model = TypeSafeJEVModel(
+            namespace="jev-check",
+            version=config.model.version,
+            feature_version=spec.version,
+            horizon_minutes=config.trading.horizon_minutes,
+            bar_minutes=config.trading.decision_timeframe.minutes,
+            params=params,
+        )
+        client = model.client
+        if isinstance(client, SdkJevClient):
+            names = await asyncio.to_thread(client.list_models)
+            out.line(f"models available  {', '.join(names) or 'none'}")
+            if model.params.api_model not in names:
+                out.line(f"WARNING           pinned api_model {model.params.api_model!r} is not in that list")
+        day = next(calendar.sessions_between(date(2024, 3, 4), date(2024, 3, 8)))
+        bars = [
+            bar
+            for _, batch, _ in SyntheticMarket(config.market_data.mock, calendar).generate(
+                ["MOCKA"], day.day, day.day
+            )
+            for bar in batch
+        ][: spec.window]
+        features = FeatureEngine(spec, namespace="jev-check", day_start=calendar.day_start).compute(bars)
+        started = perf_counter()
+        try:
+            prediction = await asyncio.to_thread(model.predict, features)
+        except Exception as exc:
+            out.line(f"FAILED            {type(exc).__name__}: {exc}")
+            return EXIT_FAILED
+        elapsed_ms = (perf_counter() - started) * 1000
+    out.line(f"api model         {model.params.api_model}")
+    out.line(
+        f"decision          {prediction.direction.value}  p_up={prediction.probability_up:.3f} "
+        f"p_down={prediction.probability_down:.3f} confidence={prediction.confidence:.3f}"
+    )
+    out.line(
+        f"latency           {elapsed_ms:.0f} ms (kill switch limit {config.kill_switch.max_decision_latency_ms:.0f} ms)"
+    )
+    out.line(f"input tokens      {model.usage.input_tokens}  (~USD {model.cost_usd:.6f} for this call)")
+    out.line("Synthetic input: this checks the integration, not whether Jev has any edge.")
+    return EXIT_OK
+
+
 COMMANDS = {
     "simulate": cmd_simulate,
     "trace": cmd_trace,
     "verify": cmd_verify,
     "kill-switch": cmd_kill_switch,
     "run": cmd_run,
+    "jev-check": cmd_jev_check,
 }
 
 

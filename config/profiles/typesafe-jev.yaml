@@ -1,0 +1,18 @@
+# Profile: JEV decisions delegated to TypeSafe Jev (remote API). Disabled unless passed explicitly:
+#   python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml jev-check
+#   python -m apps.trading_engine --config config/profiles/typesafe-jev.yaml simulate --start 2024-03-04
+# Requires: pip install -e ".[typesafe]" and TYPESAFE_API_KEY in .env (never in this file).
+# Jev is a general decision model with no validated market edge: treat results as an experiment (phase 3).
+model:
+  name: typesafe-jev
+  version: "0.1.0"              # version of OUR adapter (state layout + question); bump on any change
+  params:
+    api_model: jev-1.13.0       # pinned API model; `jev-check` lists the names your account accepts
+    entry_threshold: 0.55
+    edge_scale: 0.5
+    # runtime options (not part of the model identity)
+    cache_path: data/typesafe_jev_cache.jsonl   # recorded answers: re-runs and `verify` never pay twice
+    offline: false
+    timeout_seconds: 3.0
+    max_retries: 0
+    usd_per_million_input_tokens: 0.042         # check the current price before relying on cost reports
