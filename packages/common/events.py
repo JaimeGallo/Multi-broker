@@ -2,7 +2,8 @@
 
 Handlers run sequentially in subscription order, so a given input always produces the same sequence of
 side effects (reproducible backtests). A failing subscriber never stops the engine: the error is logged and
-reported through `on_error` (which marks the database unhealthy, for instance). `flush()` DOES propagate errors:
+reported through `on_error` (which marks the database unhealthy, for instance), unless the error is marked
+`fatal` (an exhausted audit backlog), which stops the run. `flush()` DOES propagate errors:
 it is the audit barrier the engine crosses before sending any order. Phase 5 bridges this bus to Redis.
 """
 
@@ -108,6 +109,8 @@ class EventBus:
                 log.exception("event handler failed", extra={"topic": topic})
                 if self._on_error is not None:
                     await self._on_error(topic, exc)
+                if getattr(exc, "fatal", False):
+                    raise
 
     async def flush(self) -> None:
         for flusher in self._flushers:

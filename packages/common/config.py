@@ -253,6 +253,8 @@ class PersistenceSection(Section):
     store_features: bool = True
     store_predictions: bool = True
     batch_size: int = Field(default=500, ge=1)
+    # Unwritten records kept while the database fails; beyond this the run stops (AuditBacklogError).
+    max_buffered_records: int = Field(default=200_000, ge=1)
     snapshot_every_minutes: int = Field(default=5, ge=1)
 
 

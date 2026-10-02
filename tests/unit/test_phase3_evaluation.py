@@ -173,6 +173,44 @@ async def test_recorder_backs_off_while_the_database_fails(tmp_path: Path) -> No
     await database.dispose()
 
 
+async def test_recorder_stops_the_run_when_the_backlog_is_exhausted(tmp_path: Path) -> None:
+    from packages.common.errors import AuditBacklogError
+
+    database = Database(sqlite_url(tmp_path / "audit.db"))
+    await database.create_all()
+    repo = AuditRepository(database, run_id="r", mode=TradingMode.BACKTEST)
+
+    async def failing(rows: Any, **kwargs: Any) -> None:
+        raise RuntimeError("database or disk is full")
+
+    repo.insert_system_events = failing  # type: ignore[method-assign]
+    bus = EventBus()
+    errors: list[str] = []
+
+    async def on_error(topic: str, exc: BaseException) -> None:
+        errors.append(type(exc).__name__)
+
+    bus.set_error_handler(on_error)
+    AuditRecorder(
+        repo, PersistenceSection(batch_size=10, max_buffered_records=50), immediate_writes=False
+    ).attach(bus)
+    event = SystemEvent(timestamp=SESSION_OPEN, level="INFO", component="t", event_type="e", message="m")
+    with pytest.raises(AuditBacklogError, match="unwritten records"):
+        for _ in range(1000):
+            await bus.publish(Topics.SYSTEM_EVENT, event)
+    assert errors[-1] == "AuditBacklogError" and errors.count("AuditBacklogError") == 1
+    await database.dispose()
+
+
+def test_disk_estimate_counts_bars_only_with_a_full_audit() -> None:
+    from apps.trading_engine.experiment import JOB_BASE_BYTES, estimate_disk_bytes
+
+    lean = estimate_disk_bytes(jobs=4, symbol_sessions=10 * 252, minutes_per_session=390, audit="lean")
+    full = estimate_disk_bytes(jobs=4, symbol_sessions=10 * 252, minutes_per_session=390, audit="full")
+    assert lean == 4 * JOB_BASE_BYTES
+    assert full > 3 * 1024**3  # a full audit of 10 symbols over a year needs GBs per model
+
+
 def order(cid: str, status: OrderStatus, signal: str = "S-1") -> Order:
     return Order(
         client_order_id=cid, broker="mock", symbol="SPY", side=Side.BUY, quantity=1, order_type=OrderType.MARKET,

@@ -150,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--start", type=date.fromisoformat)
     exp.add_argument("--end", type=date.fromisoformat)
     exp.add_argument("--symbols", help="comma separated subset of the dataset symbols")
+    exp.add_argument(
+        "--audit",
+        choices=("lean", "full"),
+        default="lean",
+        help="lean (default): no bars/features/predictions stored, job databases deleted; "
+        "full: everything stored and kept for `verify` (use on short ranges)",
+    )
+    exp.add_argument(
+        "--keep-dbs", action="store_true", default=None, help="keep the job databases with --audit lean"
+    )
     exp.add_argument("--json", action="store_true")
     sub.add_parser("experiments", help="list recorded experiments")
 
@@ -570,6 +580,10 @@ def print_experiment(out: Console, payload: dict[str, Any]) -> None:
         f"range             {rng['start']}..{rng['end']}  {rng['sessions']} sessions, {len(payload['folds'])} monthly folds"
     )
     out.line(f"symbols           {', '.join(payload['symbols'])}")
+    audit = payload.get("audit")
+    if audit:
+        kept = "job databases kept" if audit["job_databases_kept"] else "job databases deleted"
+        out.line(f"audit             {audit['level']} ({kept})")
     costs = payload.get("costs", {})
     if costs:
         spread = (
@@ -638,6 +652,8 @@ async def cmd_experiment(args: argparse.Namespace, out: Console) -> int:
         out.line(
             f"  [{done}/{total}] {result.model:<16} {result.fold}  {result.status:<9} trades {len(result.trades):>5}  net {pnl:,.2f}"
         )
+        if result.error:
+            out.line(f"      error: {result.error[:300]}")
 
     if not args.json:
         out.line(mode_banner(TradingMode.BACKTEST, config.broker.active, "historical"))
@@ -650,6 +666,8 @@ async def cmd_experiment(args: argparse.Namespace, out: Console) -> int:
         end=args.end,
         progress=None if args.json else progress,
         report=None if args.json else out.line,
+        audit=args.audit,
+        keep_dbs=args.keep_dbs,
     )
     if args.json:
         out.json(result.payload)

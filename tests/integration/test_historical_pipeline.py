@@ -15,10 +15,12 @@ from apps.trading_engine.bootstrap import SimulationOptions, run_simulation
 from apps.trading_engine.experiment import run_experiment
 from packages.common.config import AlpacaDataSection
 from packages.common.enums import TradingMode
+from packages.common.errors import ConfigError
 from packages.market_data.alpaca_history import AlpacaHistoricalClient
 from packages.market_data.dataset import DatasetStore
 from packages.market_data.spreads import calibrate_spreads, write_spreads
 from packages.persistence.database import Database
+from packages.persistence.models import BacktestTradeRow, FeatureRow, MarketBarRow, PredictionRow
 from packages.persistence.repositories import AuditRepository
 from packages.pipeline.replay import DecisionVerifier
 from tests.fake_alpaca import FakeAlpaca
@@ -92,12 +94,65 @@ async def test_experiment_compares_models_fold_by_fold(dataset_root: Path, tmp_p
     assert payload["comparisons"]["baseline-flat"]["sessions"] == 9
     on_disk = json.loads((result.output_dir / "results.json").read_text(encoding="utf-8"))
     assert on_disk["dataset"]["version"] == payload["dataset"]["version"]
+    assert payload["audit"] == {"level": "lean", "job_databases_kept": False}
+    assert [p.name for p in result.output_dir.iterdir()] == ["results.json"]  # job databases deleted
     database = Database(sqlite_url(tmp_path / "main.db"))
     try:
         recorded = await AuditRepository(database, run_id="x", mode=TradingMode.BACKTEST).list_experiments()
         assert recorded[0]["experiment_id"] == result.experiment_id
     finally:
         await database.dispose()
+
+
+async def test_full_audit_experiment_keeps_verifiable_job_databases(
+    dataset_root: Path, tmp_path: Path
+) -> None:
+    config = historical_config(dataset_root, symbols=["AAPL"], db=tmp_path / "main.db")
+    result = await run_experiment(
+        config, models=["baseline-ma"], audit="full", start=date(2024, 4, 1), end=date(2024, 4, 5),
+        output_root=tmp_path / "experiments",
+    )  # fmt: skip
+    assert result.payload["audit"] == {"level": "full", "job_databases_kept": True}
+    job = result.payload["jobs"][0]
+    database = Database(job["database_url"])
+    try:
+        repo = AuditRepository(database, run_id=job["run_id"], mode=TradingMode.BACKTEST)
+        assert await repo.count(MarketBarRow) == 5 * 390
+        verifier = DecisionVerifier(repo)
+        signals = await repo.list_signals(limit=20, run_id=job["run_id"])
+        assert signals and all([(await verifier.verify_decision(s["signal_id"])).ok for s in signals])
+    finally:
+        await database.dispose()
+
+
+async def test_lean_job_databases_hold_no_bars(dataset_root: Path, tmp_path: Path) -> None:
+    config = historical_config(dataset_root, symbols=["AAPL"], db=tmp_path / "main.db")
+    result = await run_experiment(
+        config, models=["baseline-ma"], keep_dbs=True, start=date(2024, 4, 1), end=date(2024, 4, 5),
+        output_root=tmp_path / "experiments",
+    )  # fmt: skip
+    job = result.payload["jobs"][0]
+    database = Database(job["database_url"])
+    try:
+        repo = AuditRepository(database, run_id=job["run_id"], mode=TradingMode.BACKTEST)
+        assert await repo.count(MarketBarRow) == 0 and await repo.count(FeatureRow) == 0
+        assert await repo.count(PredictionRow) == 0 and await repo.count(BacktestTradeRow) > 0
+    finally:
+        await database.dispose()
+
+
+async def test_experiment_refuses_to_start_without_disk(
+    dataset_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apps.trading_engine.experiment as experiment
+
+    monkeypatch.setattr(experiment, "free_bytes", lambda path: 512 * 1024**2)
+    with pytest.raises(ConfigError, match="not enough disk"):
+        await run_experiment(
+            historical_config(dataset_root, symbols=["AAPL"], db=tmp_path / "main.db"), models=["baseline-flat"],
+            output_root=tmp_path / "experiments",
+        )  # fmt: skip
+    assert not (tmp_path / "experiments").exists()
 
 
 def test_cli_data_commands(dataset_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

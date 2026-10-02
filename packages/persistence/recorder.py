@@ -21,6 +21,7 @@ from packages.common.entities import (
     Signal,
     Trade,
 )
+from packages.common.errors import AuditBacklogError
 from packages.common.events import (
     BarRecord,
     BrokerEvent,
@@ -127,9 +128,14 @@ class AuditRecorder:
         repo = self._repo
         try:
             await self._write(repo)
-        except Exception:
+        except Exception as exc:
             # Keep everything buffered; retry automatically only once the backlog has doubled. The audit
             # barrier before an order (bus.flush) always retries, so no order can skip a failed write.
+            if self._pending >= self._cfg.max_buffered_records:
+                # Disk full or database gone for good: stop the run instead of exhausting memory.
+                raise AuditBacklogError(
+                    f"audit database unavailable with {self._pending:,} unwritten records: {exc}"
+                ) from exc
             self._next_auto_flush = max(self._cfg.batch_size, 2 * self._pending)
             raise
         self._next_auto_flush = self._cfg.batch_size

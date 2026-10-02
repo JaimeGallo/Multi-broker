@@ -85,6 +85,18 @@ python -m apps.trading_engine --config config/profiles/phase3.yaml experiment --
 Duración orientativa: ~2 s por símbolo y día con un modelo que opera mucho, dividido entre los procesos.
 `simulate` y `experiment` muestran cada 30 s el avance (sesiones, trabajos, tiempo y estimación restante).
 
+Auditoría de los experimentos (`--audit`):
+
+- `lean` (por defecto): guarda señales, decisiones de riesgo, órdenes, trades y eventos, pero no cada barra,
+  vector de features y predicción, y borra la base de cada trabajo al terminar (`--keep-dbs` la conserva).
+  Un año de 10 símbolos ocupa poco disco y memoria.
+- `full`: guarda todo y conserva las bases para `verify`. Cuesta unos 4 KB por barra y símbolo (un año de 10
+  símbolos son ~4 GB por modelo); úsalo en rangos cortos (`--start/--end`).
+
+Antes de empezar, `experiment` estima el disco necesario y se niega si no cabe con 1 GB de margen. Si la base de
+datos falla de forma persistente (disco lleno), el trabajo se detiene y queda como FAILED en lugar de acumular
+registros en memoria (`persistence.max_buffered_records`).
+
 ## JEV con TypeSafe (opcional, desactivado)
 
 El adaptador `typesafe-jev` delega la decisión de dirección en el modelo Jev de TypeSafe AI. No se usa salvo que

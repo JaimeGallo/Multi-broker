@@ -23,6 +23,13 @@ class DataError(JEVError):
     """Market data problem (unsupported subscription, malformed payload...)."""
 
 
+class AuditBacklogError(JEVError):
+    """The audit database kept failing and the unwritten backlog reached its limit. Fatal: the event bus
+    re-raises it, so the run stops instead of growing in memory until the machine runs out."""
+
+    fatal = True
+
+
 class ModelError(JEVError):
     """The predictive model failed to produce a valid prediction."""
 
