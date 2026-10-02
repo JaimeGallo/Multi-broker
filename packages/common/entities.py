@@ -199,6 +199,7 @@ class FeatureVector(Frozen):
     window_start: UtcDatetime
     window_end: UtcDatetime
     n_bars: int
+    source: str = ""
     quote: MarketQuote | None = None
 
     def get(self, name: str) -> float:

@@ -204,7 +204,8 @@ class RiskSection(Section):
 class ExecutionSection(Section):
     entry_order_type: Literal["market"] = "market"
     time_in_force: TimeInForce = TimeInForce.DAY
-    use_bracket: bool = True
+    # v1 always places broker-side protective legs (stop loss + take profit): no position ever lacks a stop.
+    use_bracket: Literal[True] = True
     exit_at_horizon: bool = True
     flatten_minutes_before_close: int = Field(default=5, ge=0)
     ack_timeout_seconds: float = Field(default=15.0, gt=0)

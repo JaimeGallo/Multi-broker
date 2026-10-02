@@ -3,41 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from datetime import datetime
 
 from packages.common.entities import AccountSnapshot, Fill, PortfolioSnapshot, Position
-
-EPSILON = 1e-9
-
-
-@dataclass
-class PositionState:
-    symbol: str
-    quantity: float = 0.0
-    average_price: float = 0.0
-    realized_pnl: float = 0.0
-
-    def apply(self, signed_quantity: float, price: float) -> float:
-        """Apply a signed fill; return the realized PnL it produced (before fees)."""
-        if abs(self.quantity) < EPSILON or (self.quantity > 0) == (signed_quantity > 0):
-            new_quantity = self.quantity + signed_quantity
-            self.average_price = (
-                abs(self.quantity) * self.average_price + abs(signed_quantity) * price
-            ) / abs(new_quantity)
-            self.quantity = new_quantity
-            return 0.0
-        closing = min(abs(signed_quantity), abs(self.quantity))
-        direction = 1.0 if self.quantity > 0 else -1.0
-        realized = closing * (price - self.average_price) * direction
-        self.quantity += signed_quantity
-        if abs(self.quantity) < EPSILON:
-            self.quantity = 0.0
-            self.average_price = 0.0
-        elif (self.quantity > 0) != (direction > 0):
-            self.average_price = price
-        self.realized_pnl += realized
-        return realized
+from packages.common.positions import EPSILON, PositionState
 
 
 class PortfolioTracker:
@@ -96,6 +65,9 @@ class PortfolioTracker:
 
     def price(self, symbol: str) -> float | None:
         return self._prices.get(symbol)
+
+    def prices(self) -> dict[str, float]:
+        return dict(self._prices)
 
     def gross_exposure(self) -> float:
         return sum(abs(p.quantity) * self._prices.get(s, p.average_price) for s, p in self._positions.items())

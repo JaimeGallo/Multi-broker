@@ -161,5 +161,6 @@ class FeatureEngine:
             window_start=window[0].start,
             window_end=last.end,
             n_bars=len(window),
+            source=last.source,
             quote=used_quote,
         )
