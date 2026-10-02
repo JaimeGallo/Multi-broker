@@ -588,10 +588,16 @@ class AuditRepository:
                 updated_at=row.updated_at,
             )
 
-    async def list_signals(self, *, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
-        statement = select(SignalRow).order_by(SignalRow.ts.desc()).limit(limit)
+    async def list_signals(
+        self, *, limit: int | None = 20, status: str | None = None, run_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        statement = select(SignalRow).order_by(SignalRow.ts.desc(), SignalRow.signal_id)
         if status is not None:
             statement = statement.where(SignalRow.status == status)
+        if run_id is not None:
+            statement = statement.where(SignalRow.run_id == run_id)
+        if limit is not None:
+            statement = statement.limit(limit)
         async with self._db.sessions() as session:
             return [row_to_dict(row) for row in (await session.execute(statement)).scalars().all()]
 
@@ -665,6 +671,7 @@ class AuditRepository:
                     "namespace": run.namespace,
                     "git_commit": run.git_commit,
                     "config_hash": run.config_hash,
+                    "config": dict(run.config),
                 }
                 if run is not None
                 else None,

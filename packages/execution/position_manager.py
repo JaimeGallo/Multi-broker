@@ -123,10 +123,16 @@ class PositionManager:
         if position is None or order.client_order_id != position.entry_client_order_id:
             return
         for leg in order.legs:
-            if leg.intent is OrderIntent.TAKE_PROFIT:
-                position.take_profit_id = leg.client_order_id
-            elif leg.intent is OrderIntent.STOP_LOSS:
-                position.stop_loss_id = leg.client_order_id
+            self._record_leg(position, leg)
+
+    @staticmethod
+    def _record_leg(position: ManagedPosition, leg: Order) -> None:
+        if leg.parent_client_order_id not in (None, position.entry_client_order_id):
+            return
+        if leg.intent is OrderIntent.TAKE_PROFIT:
+            position.take_profit_id = leg.client_order_id
+        elif leg.intent is OrderIntent.STOP_LOSS:
+            position.stop_loss_id = leg.client_order_id
 
     def get(self, signal_id: str) -> ManagedPosition | None:
         return self._positions.get(signal_id)
@@ -180,6 +186,9 @@ class PositionManager:
         position = self._positions.get(order.signal_id) if order.signal_id else None
         if position is None or position.state is LifecycleState.CLOSED:
             return
+        if order.parent_client_order_id == position.entry_client_order_id:
+            # Merged broker snapshots carry leg ids only: learn the legs as they are reported.
+            self._record_leg(position, order)
         if order.client_order_id == position.entry_client_order_id and order.is_terminal:
             position.entry_terminal = True
             if order.filled_quantity <= EPSILON:

@@ -144,6 +144,9 @@ class BrokerExecutionEngine(ExecutionEngine):
         merged = await self._merge(local, remote, reason="submit")
         for leg in remote.legs:
             await self.adopt_leg(leg, merged)
+        if remote.legs:
+            # The returned view carries the legs so callers can track them right away (they are stored separately).
+            merged = merged.model_copy(update={"legs": [leg.model_copy(deep=True) for leg in remote.legs]})
         return merged
 
     async def cancel(self, client_order_id: str) -> None:
@@ -223,7 +226,10 @@ class BrokerExecutionEngine(ExecutionEngine):
         await self._save(baseline)
         if target.status is not OrderStatus.SUBMITTED or target.filled_quantity > 0:
             await self._commit(
-                baseline, apply_snapshot(baseline, target, timestamp=target.updated_at, reason="adopted_leg")
+                baseline,
+                apply_snapshot(baseline, target, timestamp=target.updated_at, reason="adopted_leg"),
+                from_event=False,
+                reason="adopted_leg",
             )
 
     async def mark_local(self, order: Order, status: OrderStatus, reason: str) -> Order:
