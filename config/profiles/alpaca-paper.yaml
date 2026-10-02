@@ -24,6 +24,11 @@ broker:
     enabled: true
     paper: true
 
+data_quality:
+  # IEX publishes no bar for a minute without IEX trades. Missing minutes are first re-requested by REST; a
+  # single minute still missing is "no trade on IEX", not a feed fault, so it does not block the next 15 bars.
+  ignore_gaps_up_to_bars: 1
+
 model:
   name: jev-heuristic           # no validated edge: this run tests the machinery, not profitability
 

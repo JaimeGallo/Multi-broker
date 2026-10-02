@@ -89,6 +89,7 @@ class PaperReport:
     summary: dict[str, Any]
     trades: list[Any]
     reconciliation: dict[str, Any] | None
+    feed: dict[str, int] = field(default_factory=dict)
 
 
 def check_paper_config(config: AppConfig) -> None:
@@ -155,7 +156,9 @@ async def build_paper(config: AppConfig, options: PaperOptions) -> PaperContext:
     stop_at = session.close + options.stop_after_close if session is not None else None
 
     async def warmup() -> list[MarketBar]:
-        return await recent_bars(market, calendar, list(config.trading.symbols), clock.now())
+        bars = await recent_bars(market, calendar, list(config.trading.symbols), clock.now())
+        market.prime(bars)  # the first live bar of each symbol is checked for a hole after the history
+        return bars
 
     runner_kwargs: dict[str, Any] = {"sleep": options.sleep} if options.sleep is not None else {}
     runner = RealtimeRunner(
@@ -212,6 +215,7 @@ async def run_paper(ctx: PaperContext) -> PaperReport:
         return PaperReport(
             run_id=run.run_id, namespace=run.namespace, status=status, session=ctx.session, result=result,
             summary=summary, trades=list(ctx.engine.ledger.closed), reconciliation=report.summary(),
+            feed=feed_stats(ctx.market_data),
         )  # fmt: skip
     except BaseException:
         with contextlib.suppress(Exception):
@@ -223,6 +227,16 @@ async def run_paper(ctx: PaperContext) -> PaperReport:
         with contextlib.suppress(Exception):
             await ctx.engine.stop()
         await ctx.database.dispose()
+
+
+def feed_stats(market: AlpacaMarketDataAdapter) -> dict[str, int]:
+    return {
+        "gap_checks": market.gap_checks,
+        "repaired_bars": market.repaired_bars,
+        "backfilled_bars": market.backfilled_bars,
+        "corrected_bars_ignored": market.corrected_bars,
+        "reconnections": market.reconnections,
+    }
 
 
 def _jsonable(summary: dict[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,7 @@ Handlers are awaited sequentially, so the same input stream always produces the 
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -100,6 +101,7 @@ class EngineCounters:
     bars: int = 0
     rejected_bars: int = 0
     quality: Counter[str] = field(default_factory=Counter)
+    quality_issues: Counter[str] = field(default_factory=Counter)  # issue codes of bars that were not STALE
     predictions: int = 0
     signals_generated: int = 0
     signal_outcomes: Counter[str] = field(default_factory=Counter)
@@ -347,12 +349,21 @@ class TradingEngine:
                     "WARNING", "market_data", f"bar.{kind}", f"{bar.symbol} {bar.start.isoformat()}", {}
                 )
             return
+        tolerated = self._config.data_quality.ignore_gaps_up_to_bars
+        if 0 < ingest.gap_bars <= tolerated:
+            # A short gap the feed is known to produce without a fault (IEX: no trade on that exchange that
+            # minute, already checked by REST). Counted, but it neither degrades this bar nor the next ones.
+            self.counters.quality_issues["tolerated_gap"] += 1
+            ingest = dataclasses.replace(ingest, gap_bars=0)
         history = self._market_engine.bars(bar.symbol)
         quote = self._market_engine.latest_quote(bar.symbol)
         report = self._quality.evaluate_bar(
             bar, ingest, history, quote, now, self._market_engine.bars_since_gap(bar.symbol)
         )
         self.counters.quality[report.status.value] += 1
+        if report.status is not DataQualityStatus.STALE:
+            for issue in report.issues:
+                self.counters.quality_issues[issue.code] += 1
         await self._bus.publish(Topics.MARKET_BAR, BarRecord(bar, report))
         if report.status is DataQualityStatus.INVALID:
             self.counters.no_trade[NoTradeReason.DATA_INVALID.value] += 1

@@ -147,6 +147,9 @@ class DataQualitySection(Section):
     jump_lookback_bars: int = Field(default=20, ge=5)
     max_spread_bps: float = Field(default=50.0, gt=0)
     gap_memory_bars: int = Field(default=15, ge=0)
+    # Gaps of up to this many bars are not treated as faults (IEX publishes no bar for a minute without IEX
+    # trades). 0 = every gap degrades the following `gap_memory_bars` bars (consolidated SIP data).
+    ignore_gaps_up_to_bars: int = Field(default=0, ge=0)
     block_on_degraded: bool = True
 
 

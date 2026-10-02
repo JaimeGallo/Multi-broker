@@ -37,6 +37,7 @@ from apps.trading_engine.paper import (
     run_paper,
     session_label,
 )
+from apps.trading_engine.paper_check import CheckStep, describe, paper_check
 from apps.trading_engine.progress import ProgressBoard
 from packages.common.clock import SystemClock
 from packages.common.config import AppConfig, load_config
@@ -133,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-wait", action="store_true", help="exit instead of waiting when the market is not open yet"
     )
     run.add_argument("--run-id")
+
+    check = sub.add_parser(
+        "paper-check", help="one real order lifecycle in the Alpaca paper account (market must be open)"
+    )
+    check.add_argument("--symbol", default="SPY")
+    check.add_argument("--quantity", type=int, default=1)
 
     data = sub.add_parser("data", help="download and inspect historical datasets (Alpaca)")
     data_sub = data.add_subparsers(dest="data_command", required=True)
@@ -516,6 +523,30 @@ async def cmd_run(args: argparse.Namespace, out: Console) -> int:
     return EXIT_OK if report.status == "COMPLETED" else EXIT_FAILED
 
 
+async def cmd_paper_check(args: argparse.Namespace, out: Console) -> int:
+    config = _config(args)
+    check_paper_config(config)
+    out.line(mode_banner(TradingMode.PAPER, "alpaca", f"alpaca {config.market_data.alpaca.feed}"))
+    out.line(
+        f"  paper-check: buy {args.quantity} {args.symbol.upper()} with a bracket, cancel the legs, sell, verify flat."
+    )
+
+    def show(step: CheckStep) -> None:
+        mark = "ok  " if step.ok else "FAIL"
+        out.line(f"  [{mark}] {step.name:<22} {step.seconds:5.1f}s  {step.detail}")
+
+    report = await paper_check(
+        config,
+        symbol=args.symbol.upper(),
+        quantity=args.quantity,
+        database_url=_database_url(config),
+        on_step=show,
+    )
+    for line in describe(report):
+        out.line(line)
+    return EXIT_OK if report.passed else EXIT_FAILED
+
+
 def _hours(delta: timedelta) -> str:
     minutes = int(delta.total_seconds() // 60)
     return f"{minutes // 60}h{minutes % 60:02d}m"
@@ -537,8 +568,13 @@ def print_paper_report(out: Console, report: PaperReport, config: AppConfig) -> 
     if result is not None:
         out.line(f"warm-up bars      {result.warmup_bars}")
         out.line(f"live bars         {result.bars}  order events {result.order_events}")
+    if report.feed:
+        out.line(f"feed              {report.feed}")
     out.line(
         f"bars accepted     {counters['bars']}  rejected {counters['rejected_bars']}  quality {counters['quality']}"
+    )
+    out.line(
+        f"quality issues    {counters.get('quality_issues') or 'none'}  (bars recent enough to trade on)"
     )
     out.line(f"signals           {counters['signals_generated']}  outcomes {counters['signal_outcomes']}")
     out.line(f"no-trade reasons  {counters['no_trade']}")
@@ -842,6 +878,7 @@ COMMANDS = {
     "verify": cmd_verify,
     "kill-switch": cmd_kill_switch,
     "run": cmd_run,
+    "paper-check": cmd_paper_check,
     "jev-check": cmd_jev_check,
     "data": cmd_data,
     "experiment": cmd_experiment,

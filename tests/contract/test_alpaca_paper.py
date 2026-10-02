@@ -195,3 +195,26 @@ async def test_market_stream_parses_bars_and_quotes_and_stops_on_fatal_errors() 
     with pytest.raises(DataError, match="connection limit"):
         await asyncio.wait_for(anext(stream), 1)
     await adapter.disconnect()
+
+
+async def test_a_live_bar_after_a_hole_brings_the_missing_minutes_first() -> None:
+    clock, fake = clock_and_fake()
+    series = fake.regular_bars("SPY", TODAY, TODAY)
+    adapter = AlpacaMarketDataAdapter(
+        AlpacaDataSection(feed="iex"), clock, key="test-key", secret="secret", transport=fake.transport(),
+        connector=fake.connector, sleep=no_sleep,
+    )  # fmt: skip
+    await adapter.connect()
+    adapter.prime(series[:30])  # the warm-up history ends with the 09:59 bar
+    await adapter.subscribe_bars(["SPY"], Timeframe.MIN_1)
+    stream = adapter.stream()
+    reader = asyncio.ensure_future(anext(stream))
+    for _ in range(100):
+        if any(s.kind == "data" and s.ready for s in fake.sockets):
+            break
+        await asyncio.sleep(0.005)
+    await fake.advance([series[33]])  # the stream's first bar is 10:03
+    got = [await asyncio.wait_for(reader, 1)] + [await asyncio.wait_for(anext(stream), 1) for _ in range(3)]
+    assert [b.start for b in got] == [b.start for b in series[30:34]]
+    assert adapter.gap_checks == 1 and adapter.repaired_bars == 3
+    await adapter.disconnect()

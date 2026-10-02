@@ -34,6 +34,8 @@ from packages.market_data.base import MarketDataAdapter
 
 log = logging.getLogger(__name__)
 
+MAX_REPAIR = timedelta(minutes=30)  # longer holes are left to the reconnection backfill / data quality
+
 FATAL_CODES = {402: "authentication failed", 404: "authentication timeout", 406: "connection limit exceeded "
                "(another program is using this Alpaca data stream)", 409: "insufficient subscription for this feed"}  # fmt: skip
 
@@ -71,6 +73,8 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
         self._last_bar_start: dict[str, datetime] = {}
         self._detail = ""
         self.corrected_bars = 0
+        self.gap_checks = 0
+        self.repaired_bars = 0
         self.backfilled_bars = 0
         self.reconnections = 0
 
@@ -183,7 +187,7 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
                 self._ready.set()
                 while True:
                     for message in _messages(await socket.recv()):
-                        self._handle(message)
+                        await self._handle(message)
             except asyncio.CancelledError:
                 raise
             except DataError as exc:
@@ -232,12 +236,13 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
             raise DataError(f"Alpaca market data: {text} (code {code})")
         raise ConnectionError(f"Alpaca market data error {code}: {text}")
 
-    def _handle(self, message: dict[str, Any]) -> None:
+    async def _handle(self, message: dict[str, Any]) -> None:
         kind = message.get("T")
         now = self._clock.now()
         if kind == "b":
             self._last_message_at = now
             bar = self._bar(message["S"], message, received_at=now)
+            await self._repair_gap(bar)
             last = self._last_bar_start.get(bar.symbol)
             if last is None or bar.start > last:
                 self._last_bar_start[bar.symbol] = bar.start
@@ -251,6 +256,34 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
             self.corrected_bars += 1
         elif kind == "error":
             self._check_error(message)
+
+    def prime(self, bars: Sequence[MarketBar]) -> None:
+        """Remember the last bar the engine already has per symbol (warm-up), so the first live bar can be
+        checked for a hole between the REST history and the stream."""
+        for bar in bars:
+            last = self._last_bar_start.get(bar.symbol)
+            if last is None or bar.start > last:
+                self._last_bar_start[bar.symbol] = bar.start
+
+    async def _repair_gap(self, bar: MarketBar) -> None:
+        """A live bar that skips minutes: ask REST for the missing ones first. A bar the stream did not deliver
+        (late start, short glitch) comes back; a minute without trades on this feed stays missing."""
+        last = self._last_bar_start.get(bar.symbol)
+        if last is None or bar.start.date() != last.date():
+            return
+        start = last + timedelta(minutes=1)
+        if bar.start <= start or bar.start - start > MAX_REPAIR:
+            return
+        self.gap_checks += 1
+        try:
+            missing = await self.get_historical_bars(bar.symbol, start, bar.start)
+        except Exception as exc:  # a failed repair leaves the gap to the data quality engine
+            log.warning("gap repair failed", extra={"symbol": bar.symbol, "error": str(exc)})
+            return
+        for found in missing:
+            self.repaired_bars += 1
+            self._last_bar_start[bar.symbol] = found.start
+            self._queue.put_nowait(found)
 
     async def _backfill(self) -> None:
         """Minutes missed while disconnected, by REST, before live bars resume (ordered by bar end)."""

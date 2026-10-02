@@ -178,3 +178,21 @@ def test_anomalous_feed_is_flagged_not_traded_blindly(tmp_path: Path) -> None:
     assert counters["no_trade"].get("data_degraded", 0) > 0
     degraded = rows(db, "select count(*) n from market_bars where quality_status = 'DEGRADED'")[0]["n"]
     assert degraded > 0
+
+
+def test_short_gaps_can_be_tolerated_and_every_quality_issue_is_counted(tmp_path: Path) -> None:
+    feed = {"market_data": {"mock": {"gap_rate": 0.03}}}
+    strict = simulate(tmp_path / "strict.db", symbols=["MOCKA"], run_id="run_strict", extra=feed)
+    issues = strict.summary["counters"]["quality_issues"]
+    assert (
+        issues.get("gap", 0) > 0 and issues.get("recent_gap", 0) > issues["gap"]
+    )  # each gap blocks what follows
+    tolerant = simulate(
+        tmp_path / "tolerant.db", symbols=["MOCKA"], run_id="run_tolerant",
+        extra={**feed, "data_quality": {"ignore_gaps_up_to_bars": 1}},
+    )  # fmt: skip
+    relaxed = tolerant.summary["counters"]
+    assert relaxed["quality_issues"].get("tolerated_gap", 0) > 0
+    assert (
+        relaxed["no_trade"].get("data_degraded", 0) < strict.summary["counters"]["no_trade"]["data_degraded"]
+    )

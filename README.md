@@ -110,6 +110,16 @@ python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml run    
 python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml run --minutes 30 # prueba corta
 ```
 
+Prueba del ciclo de órdenes real (con el mercado abierto, unos 2 minutos, centavos de dinero simulado):
+
+```bash
+python -m apps.trading_engine --config config/profiles/alpaca-paper.yaml paper-check   # 1 acción de SPY
+```
+
+Compra con bracket, comprueba la ejecución y las patas por `trade_updates`, cancela las patas, vende y verifica
+que la cuenta queda plana. Se niega si el símbolo ya tiene posición u órdenes; si algo falla, cancela lo que abrió
+y cierra lo que compró. Todo queda en la base de auditoría.
+
 Qué hace `run`:
 
 1. Conecta con la cuenta paper, lee el calendario oficial y mide el desfase del reloj (más de 2 s bloquea las
@@ -122,8 +132,11 @@ Qué hace `run`:
 6. Ctrl+C detiene de forma segura: las posiciones abiertas conservan su stop y objetivo en Alpaca y el próximo
    `run` las reconcilia.
 
-Feed IEX (gratis): precios reales de una sola bolsa; algunas barras faltan y el control de calidad bloquea
-entradas tras un hueco. Las comisiones reportadas son tasas regulatorias estimadas (Alpaca paper no cobra).
+Feed IEX (gratis): precios reales de una sola bolsa; algunas barras faltan. Cuando una barra en vivo salta
+minutos, el adaptador pide los que faltan por REST antes de entregarla (también en la unión entre el
+calentamiento y el stream). Si un minuto sigue faltando es que no hubo operaciones en IEX: el perfil lo tolera
+(`data_quality.ignore_gaps_up_to_bars: 1`); huecos mayores siguen bloqueando entradas. El resumen final muestra
+`quality issues` (motivo de cada barra degradada) y `feed` (huecos revisados, barras recuperadas, reconexiones). Las comisiones reportadas son tasas regulatorias estimadas (Alpaca paper no cobra).
 El kill switch de paper es persistente entre ejecuciones: si se activa, revisar y `kill-switch reset`.
 
 ## JEV con TypeSafe (opcional, desactivado)

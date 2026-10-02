@@ -177,3 +177,59 @@ async def test_live_endpoint_and_wrong_mode_are_refused(tmp_path: Path) -> None:
         )
     with pytest.raises(ConfigError, match=r"alpaca-paper\.yaml"):
         await build_paper(make_config({"trading": {"mode": "paper"}}), options(fake, clock, 1))
+
+
+async def _check(fake: FakeAlpacaLive, clock: SimulatedClock, tmp_path: Path):  # type: ignore[no-untyped-def]
+    from apps.trading_engine.paper_check import paper_check
+
+    return await paper_check(
+        paper_config(tmp_path / "check.db"), clock=clock, wait_seconds=5, poll=0.005,
+        database_url=sqlite_url(tmp_path / "check.db"),
+        wiring=AlpacaWiring(environ=ENV, trading_transport=fake.transport(), data_transport=fake.transport(),
+                            connector=fake.connector),
+    )  # fmt: skip
+
+
+async def test_paper_check_runs_one_full_order_lifecycle(tmp_path: Path) -> None:
+    clock = SimulatedClock(datetime(2024, 3, 26, 11, 0, tzinfo=NY))
+    fake = FakeAlpacaLive(clock)
+    series = fake.regular_bars("SPY", TODAY, TODAY)  # the same series the REST reference price comes from
+    fake.last_price["SPY"] = series[89].close
+    done = asyncio.Event()
+
+    async def market() -> None:
+        minute = 90  # 11:00
+        while not done.is_set():
+            await asyncio.sleep(0.01)
+            await fake.advance([series[minute]], settle=0.002)
+            minute += 1
+
+    driver = asyncio.create_task(market())
+    try:
+        report = await _check(fake, clock, tmp_path)
+    finally:
+        done.set()
+        await driver
+    assert report.passed, report.steps
+    assert [s.name for s in report.steps] == [
+        "connect", "market open", "account clean", "reference price", "bracket entry filled",
+        "protective legs live", "legs cancelled", "position closed", "account flat",
+    ]  # fmt: skip
+    sent = fake.order_requests
+    assert [b["client_order_id"][-3:] for b in sent] == ["-en", "-tx"] and sent[0]["order_class"] == "bracket"
+    assert fake.positions["SPY"].qty == 0 and report.entry_price and report.exit_price
+    assert report.order_events >= 6 and not report.cleanup
+
+
+async def test_paper_check_refuses_a_symbol_that_is_already_in_use(tmp_path: Path) -> None:
+    from tests.fake_alpaca_live import FakePosition
+
+    clock = SimulatedClock(datetime(2024, 3, 26, 11, 0, tzinfo=NY))
+    fake = FakeAlpacaLive(clock)
+    fake.positions["SPY"] = FakePosition(qty=5, avg=100.0)
+    report = await _check(fake, clock, tmp_path)
+    assert not report.passed and report.steps[-1].name == "account clean"
+    assert "already has 1 position" in report.steps[-1].detail and not fake.order_requests
+    evening = SimulatedClock(datetime(2024, 3, 26, 18, 0, tzinfo=NY))
+    closed = await _check(FakeAlpacaLive(evening), evening, tmp_path)
+    assert not closed.passed and closed.steps[-1].name == "market open"
