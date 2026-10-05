@@ -111,6 +111,23 @@ modelo de producción asumido.
 Criterio de salida: informe walk-forward **después de costes**, con intervalos de confianza y comparación contra
 baselines. La conclusión "JEV no tiene ventaja" es un resultado válido y se documentaría como tal.
 
+### Resultados registrados
+
+**exp_01M46C7AP5XTJ4P8XAPX9PP51J** (05/10/2026): sip-2024, 252 sesiones, 12 folds mensuales, 10 símbolos,
+decisión 5Min, horizonte 30 min, spreads medidos, slippage 2 bps por lado, calentamiento de 2 sesiones, auditoría
+ligera. Diferencia diaria media contra no operar (IC 95 %):
+
+| modelo | trades | neto | PnL del modelo (antes de ejecución) | costo de ejecución | media/día | IC 95 % | veredicto |
+|---|---|---|---|---|---|---|---|
+| jev-heuristic | 7.895 | -43.323,54 | -5.190,31 | 38.133,22 | -171,92 | [-206,46, -136,17] | peor |
+| baseline-ma | 1.029 | -9.279,02 | -3.144,67 | 6.134,35 | -36,82 | [-61,84, -15,43] | peor |
+| baseline-random | 5.314 | -27.026,08 | -1.008,66 | 26.017,42 | -107,25 | [-130,52, -85,94] | peor |
+
+Lectura: ningún modelo tiene ventaja a 5 minutos. El problema no es solo el costo: el PnL antes de ejecución
+también es negativo, y el heurístico queda por debajo del azar (que, como control, da un bruto cercano a cero y
+pierde lo que cuesta operar, unos 4,9 USD por trade). Largos y cortos pierden por igual. El límite de pérdida diaria
+activó el kill switch en dos folds y, al ser persistente, detuvo el resto del mes (agosto del heurístico: 135 trades).
+
 ## Fase 4 — Alpaca Paper 🚧
 
 Prerrequisito del usuario: crear claves de **paper trading** en Alpaca y guardarlas en `.env`
