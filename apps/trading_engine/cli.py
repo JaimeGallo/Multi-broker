@@ -185,6 +185,12 @@ def build_parser() -> argparse.ArgumentParser:
         "full: everything stored and kept for `verify` (use on short ranges)",
     )
     exp.add_argument(
+        "--warmup-sessions",
+        type=int,
+        default=2,
+        help="previous sessions fed to each fold before it starts, to fill the feature window (default 2)",
+    )
+    exp.add_argument(
         "--keep-dbs", action="store_true", default=None, help="keep the job databases with --audit lean"
     )
     exp.add_argument("--json", action="store_true")
@@ -762,6 +768,10 @@ def print_experiment(out: Console, payload: dict[str, Any]) -> None:
     if audit:
         kept = "job databases kept" if audit["job_databases_kept"] else "job databases deleted"
         out.line(f"audit             {audit['level']} ({kept})")
+    if "warmup_sessions" in payload:
+        out.line(
+            f"warm-up           {payload['warmup_sessions']} previous session(s) per fold (observed, not traded)"
+        )
     costs = payload.get("costs", {})
     if costs:
         spread = (
@@ -846,6 +856,7 @@ async def cmd_experiment(args: argparse.Namespace, out: Console) -> int:
         report=None if args.json else out.line,
         audit=args.audit,
         keep_dbs=args.keep_dbs,
+        warmup_sessions=args.warmup_sessions,
     )
     if args.json:
         out.json(result.payload)

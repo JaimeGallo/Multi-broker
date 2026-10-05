@@ -86,6 +86,10 @@ python -m apps.trading_engine --config config/profiles/phase3.yaml experiment --
 Duración orientativa: ~2 s por símbolo y día con un modelo que opera mucho, dividido entre los procesos.
 `simulate` y `experiment` muestran cada 30 s el avance (sesiones, trabajos, tiempo y estimación restante).
 
+Cada fold mensual arranca con el mismo calentamiento que `run` en vivo: las barras de las 2 sesiones anteriores
+llenan la ventana de features sin operar (`--warmup-sessions`, 0 para desactivarlo). Sin él, con decisiones de
+5 minutos se perdían unas 1,3 sesiones al inicio de cada mes.
+
 Auditoría de los experimentos (`--audit`):
 
 - `lean` (por defecto): guarda señales, decisiones de riesgo, órdenes, trades y eventos, pero no cada barra,

@@ -14,7 +14,7 @@ from apps.trading_engine import cli
 from apps.trading_engine.bootstrap import SimulationOptions, run_simulation
 from apps.trading_engine.experiment import run_experiment
 from packages.common.config import AlpacaDataSection
-from packages.common.enums import TradingMode
+from packages.common.enums import Timeframe, TradingMode
 from packages.common.errors import ConfigError
 from packages.market_data.alpaca_history import AlpacaHistoricalClient
 from packages.market_data.dataset import DatasetStore
@@ -117,7 +117,7 @@ async def test_full_audit_experiment_keeps_verifiable_job_databases(
     database = Database(job["database_url"])
     try:
         repo = AuditRepository(database, run_id=job["run_id"], mode=TradingMode.BACKTEST)
-        assert await repo.count(MarketBarRow) == 5 * 390
+        assert await repo.count(MarketBarRow) == (2 + 5) * 390  # 2 warm-up sessions + the 5 traded ones
         verifier = DecisionVerifier(repo)
         signals = await repo.list_signals(limit=20, run_id=job["run_id"])
         assert signals and all([(await verifier.verify_decision(s["signal_id"])).ok for s in signals])
@@ -153,6 +153,29 @@ async def test_experiment_refuses_to_start_without_disk(
             output_root=tmp_path / "experiments",
         )  # fmt: skip
     assert not (tmp_path / "experiments").exists()
+
+
+async def test_folds_start_with_a_full_feature_window(dataset_root: Path, tmp_path: Path) -> None:
+    config = historical_config(dataset_root, symbols=["AAPL"], db=tmp_path / "main.db")
+    config = config.model_copy(
+        update={
+            "trading": config.trading.model_copy(
+                update={"decision_timeframe": Timeframe.MIN_5, "horizon_minutes": 30}
+            )
+        }
+    )
+    predictions = {}
+    for sessions in (0, 2):
+        result = await run_experiment(
+            config, models=["baseline-ma"], warmup_sessions=sessions, output_root=tmp_path / f"exp{sessions}"
+        )
+        assert result.payload["warmup_sessions"] == sessions
+        predictions[sessions] = {j.fold: j.counters["predictions"] for j in result.job_results}
+    # March is the dataset's first fold: nothing before it. April (5 sessions x 78 five-minute bars) decides from
+    # its first bar with the warm-up, and only after 101 bars without it.
+    assert predictions[0]["2024-03"] == predictions[2]["2024-03"] == 4 * 78 - 101 + 1
+    assert predictions[0]["2024-04"] == 5 * 78 - 101 + 1
+    assert predictions[2]["2024-04"] == 5 * 78
 
 
 def test_cli_data_commands(dataset_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

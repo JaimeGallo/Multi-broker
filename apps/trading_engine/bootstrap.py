@@ -10,7 +10,7 @@ import contextlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from packages.analytics.ledger import TradeLedger
@@ -24,7 +24,7 @@ from packages.common.calendar import RegularHoursCalendar
 from packages.common.clock import Clock, SimulatedClock
 from packages.common.config import AppConfig
 from packages.common.costs import CostModel
-from packages.common.entities import Trade
+from packages.common.entities import MarketBar, Trade
 from packages.common.enums import HealthState, TradingMode
 from packages.common.errors import ConfigError
 from packages.common.events import EventBus
@@ -168,6 +168,10 @@ class SimulationOptions:
     broker: MockBrokerAdapter | None = None  # reuse a simulated exchange (restart tests)
     git_commit: str | None = None
     on_session: Callable[[date], None] | None = None  # progress: called when a new session starts
+    # Datasets only: feed the bars of this many previous sessions before `start`, so the feature window is full
+    # from the first bar (as `run` does in real time). They are older than the simulated clock, so the engine
+    # marks them STALE and only observes them: no decision, no order.
+    warmup_sessions: int = 0
 
 
 @dataclass
@@ -203,6 +207,7 @@ class SimulationReport:
     broker_submissions: int
     extra: dict[str, Any] = field(default_factory=dict)
     trades: list[Trade] = field(default_factory=list)
+    warmup_bars: int = 0
 
 
 def load_dataset(config: AppConfig) -> Dataset | None:
@@ -454,6 +459,13 @@ async def run_simulation(
             metrics=None, finished_at=None, status="RUNNING", dataset_version=dataset_version,
         )  # fmt: skip
         await ctx.engine.start()
+        warmup = (
+            warmup_bars(ctx.dataset, ctx.calendar, symbols, options.start, options.warmup_sessions)
+            if ctx.dataset is not None
+            else []
+        )
+        for bar in warmup:
+            await ctx.engine.handle_market_event(bar)
         result = await ctx.runner.run()
         status = "INTERRUPTED" if result.interrupted else "COMPLETED"
         performance = performance_of(ctx)
@@ -483,6 +495,7 @@ async def run_simulation(
                 ),
             },
             trades=ctx.engine.ledger.closed,
+            warmup_bars=len(warmup),
         )
     except BaseException:
         with contextlib.suppress(Exception):  # the original error matters more than this bookkeeping
@@ -490,6 +503,21 @@ async def run_simulation(
         raise
     finally:
         await ctx.database.dispose()
+
+
+def warmup_bars(
+    dataset: Dataset, calendar: RegularHoursCalendar, symbols: list[str], start: date, sessions: int
+) -> list[MarketBar]:
+    """Bars of the `sessions` dataset sessions before `start`, in the order the feed would deliver them."""
+    if sessions <= 0 or start <= dataset.start:
+        return []
+    previous = [s.day for s in calendar.sessions_between(dataset.start, start - timedelta(days=1))][
+        -sessions:
+    ]
+    if not previous:
+        return []
+    bars = [bar for symbol in symbols for bar in dataset.bars(symbol, previous[0], previous[-1])]
+    return sorted(bars, key=lambda b: (b.end, b.symbol))
 
 
 def model_usage(model: JEVModel) -> dict[str, Any]:

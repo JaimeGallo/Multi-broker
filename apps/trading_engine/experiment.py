@@ -90,6 +90,7 @@ class Job:
     database_url: str
     git_commit: str | None
     keep_db: bool = True
+    warmup_sessions: int = 0
     in_worker_process: bool = False
     progress_queue: Any = None  # multiprocessing queue: one item per simulated session
 
@@ -146,6 +147,7 @@ def run_job(job: Job) -> JobResult:
         database_url=job.database_url,
         git_commit=job.git_commit,
         on_session=(lambda day: job.progress_queue.put(1)) if job.progress_queue is not None else None,
+        warmup_sessions=job.warmup_sessions,
     )
     try:
         report = asyncio.run(run_simulation(config, options))
@@ -203,6 +205,7 @@ class ExperimentResult:
     experiment_id: str
     output_dir: Path
     payload: dict[str, Any]
+    job_results: list[JobResult] = field(default_factory=list)
 
 
 async def run_experiment(
@@ -220,6 +223,7 @@ async def run_experiment(
     report_interval: float = 30.0,
     audit: str = "lean",
     keep_dbs: bool | None = None,
+    warmup_sessions: int = 2,
 ) -> ExperimentResult:
     """`keep_dbs` defaults to True for a full audit (its point is verifying the job databases) and False for a
     lean one."""
@@ -273,6 +277,7 @@ async def run_experiment(
             database_url=f"sqlite+aiosqlite:///{(output / f'{model}__{fold.name}.db').as_posix()}",
             git_commit=git_commit,
             keep_db=keep,
+            warmup_sessions=warmup_sessions,
         )
         for model in models
         for fold in folds
@@ -363,6 +368,7 @@ async def run_experiment(
         "models": models,
         "reference": reference,
         "audit": {"level": audit, "job_databases_kept": keep},
+        "warmup_sessions": warmup_sessions,
         "symbols": list(base.trading.symbols),
         "config_hash": config_hash(base),
         "costs": {
@@ -397,7 +403,7 @@ async def run_experiment(
         json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8"
     )
     await _record(base, payload, output)
-    return ExperimentResult(experiment_id, output, payload)
+    return ExperimentResult(experiment_id, output, payload, results)
 
 
 async def _record(base: AppConfig, payload: dict[str, Any], output: Path) -> None:
