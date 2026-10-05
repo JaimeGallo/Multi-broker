@@ -349,11 +349,10 @@ class TradingEngine:
                     "WARNING", "market_data", f"bar.{kind}", f"{bar.symbol} {bar.start.isoformat()}", {}
                 )
             return
-        tolerated = self._config.data_quality.ignore_gaps_up_to_bars
-        if 0 < ingest.gap_bars <= tolerated:
+        tolerated = 0 < ingest.gap_bars <= self._config.data_quality.ignore_gaps_up_to_bars
+        if tolerated:
             # A short gap the feed is known to produce without a fault (IEX: no trade on that exchange that
             # minute, already checked by REST). Counted, but it neither degrades this bar nor the next ones.
-            self.counters.quality_issues["tolerated_gap"] += 1
             ingest = dataclasses.replace(ingest, gap_bars=0)
         history = self._market_engine.bars(bar.symbol)
         quote = self._market_engine.latest_quote(bar.symbol)
@@ -364,6 +363,8 @@ class TradingEngine:
         if report.status is not DataQualityStatus.STALE:
             for issue in report.issues:
                 self.counters.quality_issues[issue.code] += 1
+            if tolerated:
+                self.counters.quality_issues["tolerated_gap"] += 1
         await self._bus.publish(Topics.MARKET_BAR, BarRecord(bar, report))
         if report.status is DataQualityStatus.INVALID:
             self.counters.no_trade[NoTradeReason.DATA_INVALID.value] += 1

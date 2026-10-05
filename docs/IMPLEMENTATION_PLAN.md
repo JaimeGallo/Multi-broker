@@ -130,8 +130,15 @@ Estado (02/10/2026): implementados 1 a 4 con REST (httpx) y WebSockets (`websock
 handshake de los streams, las rutas y los estados de orden se contrastaron con el código del SDK oficial.
 Probado de punta a punta contra un Alpaca en memoria (`tests/fake_alpaca_live.py`): sesión con operaciones,
 reinicio con reconciliación limpia, cero órdenes duplicadas, reconexión con backfill y resincronización de
-fills perdidos, rechazo de endpoints no paper. Pendiente: la primera sesión real del usuario y los tests opt-in
-contra Alpaca Paper (punto 5).
+fills perdidos, rechazo de endpoints no paper.
+
+Validación real (02 y 05/10/2026, Alpaca Paper, IEX): conexión, reconciliación limpia, calentamiento y stream
+estables; `paper-check` superado (bracket ejecutado en 1,2 s a -1,7 bps de la referencia, patas reportadas y
+canceladas, cierre y cuenta plana, 12 eventos de `trade_updates`). Barras degradadas: 60 % en la primera sesión
+(hueco en la unión calentamiento/stream y huecos de un minuto de IEX) y 10 % tras la reparación por REST y la
+tolerancia de un minuto. Señales: 202 de 204 rechazadas por ventaja insuficiente frente a costos, igual que en los
+backtests: el cuello de botella es el modelo, no la infraestructura. Pendiente: una sesión completa con
+operaciones (requiere un modelo con ventaja) y los tests opt-in contra Alpaca Paper (punto 5).
 
 ## Fase 5 — Motor en tiempo real + API
 
