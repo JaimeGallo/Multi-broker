@@ -128,6 +128,18 @@ también es negativo, y el heurístico queda por debajo del azar (que, como cont
 pierde lo que cuesta operar, unos 4,9 USD por trade). Largos y cortos pierden por igual. El límite de pérdida diaria
 activó el kill switch en dos folds y, al ser persistente, detuvo el resto del mes (agosto del heurístico: 135 trades).
 
+**exp_01M46DN7QPDPHARA8SAS1W3F9J** (05/10/2026): piloto de TypeSafe Jev (`jev-1.13.0`), enero de 2024, mismas
+condiciones (5Min, horizonte 30). 15.380 llamadas, USD 0,48, 1 hora.
+
+| modelo | trades | neto | PnL del modelo | costo de ejecución | media/día | IC 95 % | veredicto |
+|---|---|---|---|---|---|---|---|
+| typesafe-jev | 832 | -4.296,88 | -396,43 | 3.900,45 | -204,61 | [-262,11, -149,00] | peor |
+| baseline-random | 329 | -1.346,17 | 316,00 | 1.662,17 | -64,10 | [-103,22, -22,80] | peor |
+
+Lectura: sin indicio de ventaja en un mes. Antes de costos queda por debajo del azar (-0,48 USD por trade frente a
++0,96, ambos dentro del ruido) y opera 2,5 veces más, por lo que pierde más neto. Sesgo marcado a cortos (699 de
+832) en un mes alcista; queda por revisar si viene del modelo o de cómo el adaptador le presenta el estado.
+
 ## Fase 4 — Alpaca Paper 🚧
 
 Prerrequisito del usuario: crear claves de **paper trading** en Alpaca y guardarlas en `.env`
